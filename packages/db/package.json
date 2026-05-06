@@ -10,12 +10,10 @@
   "license": "ISC",
   "type": "commonjs",
   "description": "",
-  "devDependencies": {
+  "dependencies": {
     "@repo/typescript-config": "workspace:*",
     "@types/node": "^22.13.1",
-    "prisma": "^6.5.0"
-  },
-  "dependencies": {
+    "prisma": "^6.5.0",
     "@prisma/client": "6.5.0"
   },
   "scripts": {

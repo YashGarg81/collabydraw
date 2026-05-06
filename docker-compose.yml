@@ -4,24 +4,30 @@ version: '3.8'
 services:
   frontend:
     build:
-      context: ./apps/collabydraw
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./docker/Dockerfile.frontend
     ports:
       - "3000:3000"
     environment:
       - NODE_ENV=production
+      - DATABASE_URL=postgresql://postgres:your_secure_password@database:5432/collabydraw
+      - JWT_SECRET=your_secret_here
+      - NEXT_PUBLIC_WS_URL=ws://localhost:8080
+      - NEXT_PUBLIC_BASE_URL=http://localhost:3000
     depends_on:
       - websocket
       - database
 
   websocket:
     build:
-      context: ./apps/ws
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./docker/Dockerfile.websocket
     ports:
       - "8080:8080"
     environment:
       - NODE_ENV=production
+      - DATABASE_URL=postgresql://postgres:your_secure_password@database:5432/collabydraw
+      - JWT_SECRET=your_secret_here
     depends_on:
       - database
 

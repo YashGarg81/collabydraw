@@ -112,6 +112,13 @@ If you'd like to contribute—whether it's improving the UI, optimizing performa
 💡 **Ideas for Contribution** (feel free to raise these as issues):
 - Add undo/redo support in standalone mode
 - Add support for duplicating a selected shape using **Ctrl + D** keyboard shortcut.
+
+---
+
+## 🚀 Deployment
+
+For hosting guidance and the current deployment plan, see `DEPLOYMENT.md`.
+
 - Fix: **Rounded corners not working for Diamond shape**
   When the **"rounded"** option is selected for diamond shapes, the corners remain sharp. Update the rendering logic to support rounded edges for diamonds.
 
