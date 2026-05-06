@@ -92,13 +92,7 @@ CollabyDraw is built with **privacy by design** to ensure that no sensitive draw
 
 https://plum-chamomile-116.notion.site/Collabydraw-Hand-drawn-look-feel-Collaborative-Secure-1cb6d6552d9b802597c1cb575db2a9da?pvs=4
 
----
 
-### 📽️ Youtube Video
-
-https://www.youtube.com/watch?v=NNVdRCoFnK0
-
----
 
 ### 🌍 Open Source & Contributions
 
