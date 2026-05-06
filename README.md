@@ -1,5 +1,9 @@
 # 🎨 Collabydraw | Hand-drawn look & feel • Collaborative • Secure
 
+[![CI](https://github.com/YashGarg81/collabydraw/actions/workflows/ci.yml/badge.svg)](https://github.com/YashGarg81/collabydraw/actions/workflows/ci.yml)
+[![Frontend CD](https://github.com/YashGarg81/collabydraw/actions/workflows/cd_frontend.yml/badge.svg)](https://github.com/YashGarg81/collabydraw/actions/workflows/cd_frontend.yml)
+[![WebSocket CD](https://github.com/YashGarg81/collabydraw/actions/workflows/cd_ws.yml/badge.svg)](https://github.com/YashGarg81/collabydraw/actions/workflows/cd_ws.yml)
+
 ---
 
 **CollabyDraw** is a web-based collaborative whiteboard where multiple users can draw, edit, and brainstorm together in real time. Whether solo or in a group session, the app offers a smooth, intuitive canvas experience with real-time sync, shape tools, editable text, and privacy-focused end-to-end encryption — all without needing an account.

@@ -34,7 +34,6 @@ jobs:
             echo "Error: JWT_SECRET secret is not set"
             exit 1
           fi
-          $secrets_valid
 
       - name: Build and push Frontend
         uses: docker/build-push-action@v5
@@ -51,9 +50,9 @@ jobs:
             coderomm/collabydraw:latest
             coderomm/collabydraw:${{ github.sha }}
 
-      - name: Check SSH key presence (for debug)
-        run: |
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" | head -n 15
+      # - name: Check SSH key presence (for debug)
+      #   run: |
+      #     echo "${{ secrets.SSH_PRIVATE_KEY }}" | head -n 15
 
       # - name: Deploy to VM
       #   uses: appleboy/ssh-action@v1.1.0
