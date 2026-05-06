@@ -3,14 +3,6 @@ import { webpack } from "next/dist/compiled/webpack/webpack";
 
 const nextConfig: NextConfig = {
   /* config options here */
-  env: {
-    JWT_SECRET: process.env.JWT_SECRET,
-    DATABASE_URL: process.env.DATABASE_URL,
-  },
-
-  publicRuntimeConfig: {
-    JWT_SECRET: process.env.JWT_SECRET,
-  },
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   webpack: (config, { isServer }) => {
