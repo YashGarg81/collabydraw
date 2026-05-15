@@ -511,9 +511,9 @@ export default function CanvasBoard() {
                                         onClose={() => setCanvasEngineState(prev => ({ ...prev, sidebarOpen: false }))}
                                         canvasColor={canvasEngineState.canvasColor}
                                         setCanvasColor={(newCanvasColor: SetStateAction<string>) =>
-                                            setCanvasEngineState(prev => ({ ...prev, canvasColor: typeof newCanvasColor === 'function' ? newCanvasColor(prev.canvasColor) : newCanvasColor }))
+                                        setCanvasEngineState(prev => ({ ...prev, canvasColor: typeof newCanvasColor === 'function' ? newCanvasColor(prev.canvasColor) : newCanvasColor }))
                                         }
-                                        isStandalone={mode === 'room' ? false : true}
+                                        isStandalone={mode === 'room' || !!boardId ? false : true}
                                         onClearCanvas={clearCanvas}
                                         onExportCanvas={() => canvasEngineState.engine?.exportToPNG()}
                                         onImportCanvas={() => importJsonInputRef.current?.click()}
@@ -854,7 +854,7 @@ export default function CanvasBoard() {
                     setFontStyle={(newFontStyle: SetStateAction<FontStyle>) =>
                         setCanvasEngineState(prev => ({ ...prev, fontStyle: typeof newFontStyle === 'function' ? newFontStyle(prev.fontStyle) : newFontStyle }))
                     }
-                    isStandalone={mode === 'room' ? false : true}
+                    isStandalone={mode === 'room' || !!boardId ? false : true}
                     onClearCanvas={clearCanvas}
                     onExportCanvas={() => canvasEngineState.engine?.exportToPNG()}
                 />
