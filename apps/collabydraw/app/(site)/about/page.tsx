@@ -1,4 +1,4 @@
-﻿import React from "react";
+import React from "react";
 import type { Metadata } from "next";
 import { baseMetadata } from "@/utils/metadata";
 import Script from "next/script";
@@ -14,12 +14,6 @@ export const metadata: Metadata = {
     description:
       "Learn about Collabydraw - a secure, end-to-end encrypted collaborative whiteboard tool. Discover features, privacy, encryption, and how it works.",
     url: "https://collabydraw.xyz/about",
-  },
-  twitter: {
-    ...baseMetadata.twitter,
-    title: "About Collabydraw",
-    description:
-      "Learn about Collabydraw - a secure, end-to-end encrypted collaborative whiteboard tool. Discover features, privacy, encryption, and how it works.",
   },
   alternates: {
     canonical: "https://collabydraw.xyz/about",
@@ -176,8 +170,6 @@ export default function AboutPage() {
                         ></iframe>
                     </div>
 
-                    <h3 className="mt-3 mb-1 lg:mt-8 lg:mb-2">🐦 Tweet Embed</h3>
-                    <a href="https://twitter.com/coder_om/status/1711737824058880576"></a>
                 </div>
             </section>
         </div>

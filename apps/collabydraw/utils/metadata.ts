@@ -1,4 +1,4 @@
-﻿import { Metadata } from "next";
+import { Metadata } from "next";
 
 export const baseMetadata: Metadata = {
   metadataBase: new URL("https://collabydraw.xyz"),
@@ -34,8 +34,8 @@ export const baseMetadata: Metadata = {
     "100xdevs cohort 2 excalidraw project",
     "harkirat singh cohort 2 excalidraw project",
   ],
-  authors: [{ name: "Om Sharma" }],
-  creator: "Om Sharma",
+  authors: [{ name: "Yash Garg" }],
+  creator: "Yash Garg",
   publisher: "Collabydraw",
 
   openGraph: {
@@ -56,15 +56,6 @@ export const baseMetadata: Metadata = {
         secureUrl: "https://collabydraw.xyz/brand/og-image.png",
       },
     ],
-  },
-
-  twitter: {
-    card: "summary_large_image",
-    title: "Collabydraw — Collaborative whiteboarding made easy",
-    description:
-      "Collabydraw is a virtual collaborative whiteboard tool that lets you easily sketch diagrams that have a hand-drawn feel to them. End-to-end encrypted and privacy-focused.",
-    creator: "@1omsharma",
-    images: ["https://collabydraw.xyz/brand/og-image.png"],
   },
 
   robots: {
@@ -115,10 +106,6 @@ export const generateRoomMetadata: Metadata = {
     description:
       "Join a secure, end-to-end encrypted drawing room. Collaborate in real-time with others. No login required.",
   },
-  twitter: {
-    ...baseMetadata.twitter,
-    title: "Join Room | Collabydraw",
-  },
 };
 
 export const jsonLdSchemas = {
@@ -161,10 +148,9 @@ export const jsonLdSchemas = {
     description: "A secure, collaborative whiteboard application",
     founder: {
       "@type": "Person",
-      name: "Om Sharma",
+      name: "Yash Garg",
     },
     sameAs: [
-      "https://twitter.com/1omsharma",
       "https://github.com/YashGarg81/collabydraw",
     ],
   },

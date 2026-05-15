@@ -1,4 +1,4 @@
-﻿"use client"
+"use client"
 
 import type React from "react"
 
@@ -6,7 +6,6 @@ import { useEffect, useState } from "react"
 import {
     Command,
     Github,
-    Twitter,
     UserPlus,
     Sun,
     Moon,
@@ -159,7 +158,6 @@ export function AppSidebar({ isOpen, onClose, canvasColor, setCanvasColor, isMob
                             >
                                 <Github className="h-4 w-4" />GitHub - <span className="flex items-center justify-start gap-1">{stars}<Star className="h-4 w-4" /></span>
                             </Link>
-                            <SidebarLinkItem icon={Twitter} label="Twitter / X" url="https://x.com/1omsharma" />
                             <SidebarLinkItem icon={Linkedin} label="Linkedin" url="https://www.linkedin.com/in/yash-garg-78a448312" />
                         </nav>
                     </div>
