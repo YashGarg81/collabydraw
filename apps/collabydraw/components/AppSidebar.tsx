@@ -31,7 +31,6 @@ import { signOut, useSession } from "next-auth/react"
 import { redirect, usePathname } from "next/navigation"
 import Link from "next/link"
 import { CollabAuthPrompt } from "./CollabAuthPrompt"
-import { RoomSharingDialog } from "./RoomSharingDialog"
 import { BASE_URL } from "@/config/constants"
 import CreateRoomDialog from "./CreateRoomDialog"
 
@@ -120,10 +119,18 @@ export function AppSidebar({ isOpen, onClose, canvasColor, setCanvasColor, isMob
                                         onClick={() => navigator.clipboard.writeText(window.location.href)}
                                     >
                                         <CopyIcon className="h-4 w-4" />
-                                        Room Name: <span>{roomName}</span>
+                                        Room Name: <span className="truncate max-w-[120px]">{roomName}</span>
                                     </Button>
-                                    <RoomSharingDialog open={isShareOpen} onOpenChange={setIsShareOpen} link={`${BASE_URL}/${decodedPathname}`} />
-                                    <SidebarItem icon={Share2} label="Share collaboration" onClick={() => setIsShareOpen(true)} />
+                                    <SidebarItem 
+                                        icon={LogOut} 
+                                        label="Stop live session" 
+                                        onClick={() => {
+                                            if (window.confirm("Do you want to stop the live session and return to your private local drawing pad?")) {
+                                                window.location.href = "/canvas";
+                                            }
+                                        }} 
+                                        className="text-red-400 hover:text-red-500 hover:bg-red-500/10"
+                                    />
                                     <SidebarItem icon={Trash} label="Reset the canvas" onClick={() => setClearDialogOpen(true)} />
                                 </>
                             )}
