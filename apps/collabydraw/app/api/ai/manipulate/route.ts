@@ -131,74 +131,104 @@ Respond with ONLY the summary text — no markdown, no headings.`;
 // ── Route handler ────────────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
+  let body: { action?: Action; shapes?: AnyShape[] };
+
+  // 1. Parse body — catch JSON parse errors early
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid request body. Expected JSON." }, { status: 400 });
+  }
+
+  const { action, shapes } = body;
+
+  if (!action || !["layout", "cluster", "summarize"].includes(action)) {
+    return NextResponse.json({ error: "Invalid action. Use: layout | cluster | summarize" }, { status: 400 });
+  }
+  if (!Array.isArray(shapes) || shapes.length === 0) {
+    return NextResponse.json({ error: "Shapes array is required and must not be empty." }, { status: 400 });
+  }
+
+  // 2. layout & cluster: pure math — isolated try/catch, no AI/DB
+  if (action === "layout") {
+    try {
+      const updated = computeGridLayout(shapes);
+      return NextResponse.json({ shapes: updated });
+    } catch (err) {
+      console.error("Layout error:", err);
+      return NextResponse.json({ error: "Layout computation failed." }, { status: 500 });
+    }
+  }
+
+  if (action === "cluster") {
+    try {
+      const updated = computeClusterLayout(shapes);
+      return NextResponse.json({ shapes: updated });
+    } catch (err) {
+      console.error("Cluster error:", err);
+      return NextResponse.json({ error: "Cluster computation failed." }, { status: 500 });
+    }
+  }
+
+  // 3. summarize: requires Gemini + auth
   try {
     const session = await getServerSession(authOptions);
     const userId = session?.user?.id ?? null;
 
-    const body = await req.json();
-    const { action, shapes } = body as { action?: Action; shapes?: AnyShape[] };
-
-    if (!action || !["layout", "cluster", "summarize"].includes(action)) {
-      return NextResponse.json({ error: "Invalid action. Use: layout | cluster | summarize" }, { status: 400 });
-    }
-    if (!Array.isArray(shapes) || shapes.length === 0) {
-      return NextResponse.json({ error: "Shapes array is required and must not be empty." }, { status: 400 });
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey || apiKey.trim() === "") {
+      return NextResponse.json(
+        { error: "AI summarization is not configured (missing GEMINI_API_KEY)." },
+        { status: 503 }
+      );
     }
 
-    // ── layout & cluster: pure math, no AI credits ───────────────────
-    if (action === "layout") {
-      const updated = computeGridLayout(shapes);
-      return NextResponse.json({ shapes: updated });
-    }
-
-    if (action === "cluster") {
-      const updated = computeClusterLayout(shapes);
-      return NextResponse.json({ shapes: updated });
-    }
-
-    // ── summarize: requires Gemini, consumes 1 AI credit ────────────
-    if (action === "summarize") {
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) {
-        return NextResponse.json({ error: "Gemini API key not configured." }, { status: 503 });
+    // Credit check
+    if (userId) {
+      const user = await client.user.findUnique({
+        where: { id: userId },
+        select: { plan: true, aiCredits: true },
+      });
+      const limits = getPlanLimits(user?.plan ?? "FREE");
+      if (limits.aiCreditsMonthly !== Infinity && (user?.aiCredits ?? 0) <= 0) {
+        return NextResponse.json(
+          { error: "NO_AI_CREDITS", message: "You've used all your AI credits. Upgrade to Pro for more." },
+          { status: 402 }
+        );
       }
-
-      // Credit check
-      if (userId) {
-        const user = await client.user.findUnique({
-          where: { id: userId },
-          select: { plan: true, aiCredits: true },
-        });
-        const limits = getPlanLimits(user?.plan ?? "FREE");
-        if (limits.aiCreditsMonthly !== Infinity && (user?.aiCredits ?? 0) <= 0) {
-          return NextResponse.json(
-            { error: "NO_AI_CREDITS", message: "You've used all your AI credits. Upgrade to Pro for more." },
-            { status: 402 }
-          );
-        }
-      }
-
-      const stickyNote = await summarizeBoard(shapes, apiKey);
-
-      // Decrement 1 credit
-      if (userId) {
-        const user = await client.user.findUnique({ where: { id: userId }, select: { plan: true } });
-        const limits = getPlanLimits(user?.plan ?? "FREE");
-        if (limits.aiCreditsMonthly !== Infinity) {
-          await client.user.update({ where: { id: userId }, data: { aiCredits: { decrement: 1 } } });
-        }
-      }
-
-      return NextResponse.json({ stickyNote });
     }
 
-    return NextResponse.json({ error: "Unknown action" }, { status: 400 });
+    const stickyNote = await summarizeBoard(shapes, apiKey);
+
+    // Decrement 1 credit
+    if (userId) {
+      const user = await client.user.findUnique({ where: { id: userId }, select: { plan: true } });
+      const limits = getPlanLimits(user?.plan ?? "FREE");
+      if (limits.aiCreditsMonthly !== Infinity) {
+        await client.user.update({ where: { id: userId }, data: { aiCredits: { decrement: 1 } } });
+      }
+    }
+
+    return NextResponse.json({ stickyNote });
   } catch (err) {
-    console.error("AI manipulate error:", err);
+    console.error("AI summarize error:", err);
     const errStr = String(err);
-    if (errStr.includes("429") || errStr.includes("quota")) {
-      return NextResponse.json({ error: "Gemini rate limit reached. Please wait a moment." }, { status: 429 });
+
+    if (errStr.includes("429") || errStr.includes("RESOURCE_EXHAUSTED") || errStr.includes("quota")) {
+      return NextResponse.json({ error: "AI rate limit reached. Please wait a moment and try again." }, { status: 429 });
     }
-    return NextResponse.json({ error: "Internal error. Please try again." }, { status: 500 });
+    if (errStr.includes("API_KEY_INVALID") || errStr.includes("API key not valid") || errStr.includes("PERMISSION_DENIED")) {
+      return NextResponse.json({ error: "Gemini API key is invalid. Check GEMINI_API_KEY in .env." }, { status: 503 });
+    }
+    if (errStr.includes("404") || errStr.includes("MODEL_NOT_FOUND")) {
+      return NextResponse.json({ error: "AI model unavailable. Please try again later." }, { status: 503 });
+    }
+
+    const message =
+      process.env.NODE_ENV === "development"
+        ? `AI error: ${errStr.slice(0, 200)}`
+        : "AI summarization failed. Please try again.";
+
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
