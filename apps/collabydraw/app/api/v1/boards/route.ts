@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import client from "@repo/db/client";
 import { validateApiKey } from "@/utils/apiAuth";
 import { getPlanLimits } from "@/config/planLimits";
-import { fireWebhook } from "@/lib/webhooks";
+import { fireWebhook } from "../../../../lib/webhooks";
 
 // GET /api/v1/boards — List all boards for the authenticated user
 export async function GET(req: NextRequest) {

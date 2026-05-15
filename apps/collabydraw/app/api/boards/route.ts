@@ -3,7 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/utils/auth";
 import client from "@repo/db/client";
 import { getPlanLimits } from "@/config/planLimits";
-import { fireWebhook } from "@/lib/webhooks";
+import { fireWebhook } from "../../../lib/webhooks";
 
 // Plan limit check logic below
 
