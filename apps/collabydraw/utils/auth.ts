@@ -1,5 +1,7 @@
 import { NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
+import GoogleProvider from "next-auth/providers/google";
+import GithubProvider from "next-auth/providers/github";
 import client from "@repo/db/client";
 import bcrypt from "bcrypt";
 import { PrismaAdapter } from "@next-auth/prisma-adapter";
@@ -14,6 +16,7 @@ export const authOptions: NextAuthOptions = {
     signIn: "/auth/signin",
   },
   providers: [
+    // ── Credentials (email + password) ─────────────────────────────────
     CredentialsProvider({
       name: "Credentials",
       credentials: {
@@ -26,9 +29,7 @@ export const authOptions: NextAuthOptions = {
         }
 
         const user = await client.user.findUnique({
-          where: {
-            email: credentials.email,
-          },
+          where: { email: credentials.email },
         });
 
         if (!user || !user.password) {
@@ -44,22 +45,51 @@ export const authOptions: NextAuthOptions = {
           throw new Error("Incorrect password");
         }
 
-        return {
-          id: user.id,
-          email: user.email,
-          name: user.name,
-        };
+        return { id: user.id, email: user.email, name: user.name };
       },
     }),
+
+    // ── Google OAuth ────────────────────────────────────────────────────
+    ...(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET
+      ? [
+          GoogleProvider({
+            clientId: process.env.GOOGLE_CLIENT_ID,
+            clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+            allowDangerousEmailAccountLinking: true,
+          }),
+        ]
+      : []),
+
+    // ── GitHub OAuth ────────────────────────────────────────────────────
+    ...(process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET
+      ? [
+          GithubProvider({
+            clientId: process.env.GITHUB_CLIENT_ID,
+            clientSecret: process.env.GITHUB_CLIENT_SECRET,
+            allowDangerousEmailAccountLinking: true,
+          }),
+        ]
+      : []),
   ],
+
   callbacks: {
-    async jwt({ token, user }) {
-      if (user && user.email) {
+    async jwt({ token, user, account }) {
+      // On OAuth sign-in, persist user id from DB lookup
+      if (account && account.provider !== "credentials" && user?.email) {
+        const dbUser = await client.user.findUnique({
+          where: { email: user.email },
+        });
+        if (dbUser) {
+          token.id = dbUser.id;
+          token.email = dbUser.email;
+        }
+      }
+      if (user) {
         token.id = user.id;
-        token.email = user.email;
+        token.email = user.email ?? token.email;
       }
       if (!process.env.JWT_SECRET) {
-        throw new Error("JWT_SECRET is ABSOLUTELY REQUIRED and not set");
+        throw new Error("JWT_SECRET is required");
       }
       token.accessToken = jwt.sign(
         { id: token.id, email: token.email },

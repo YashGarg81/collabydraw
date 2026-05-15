@@ -5,8 +5,12 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// ── Database ──────────────────────────────────────────────────────────────────
+// Development:  DATABASE_URL="file:./dev.db"            (SQLite)
+// Production:   DATABASE_URL="postgresql://..."         (PostgreSQL / Neon / Supabase)
+// Switch by changing the provider env var and re-running: pnpm exec prisma migrate deploy
 datasource db {
-  provider = "sqlite"
+  provider = env("DATABASE_PROVIDER") // "sqlite" | "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -123,12 +127,12 @@ model Shape {
 
 // Phase 5: Board version history — auto-snapshots of shapes JSON
 model BoardSnapshot {
-  id        String   @id @default(cuid())
-  boardId   String
-  shapes    String   // JSON stringified shapes at this point in time
-  label     String?  // optional user-facing label e.g. "Before AI layout"
-  shapeCount Int     @default(0)
-  createdAt DateTime @default(now())
+  id         String   @id @default(cuid())
+  boardId    String
+  shapes     String   // JSON stringified shapes at this point in time
+  label      String?  // optional user-facing label e.g. "Before AI layout"
+  shapeCount Int      @default(0)
+  createdAt  DateTime @default(now())
 
   @@index([boardId, createdAt])
 }
