@@ -3,6 +3,8 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/utils/auth";
 import client from "@repo/db/client";
 import { getPlanLimits } from "@/config/planLimits";
+import { fireWebhook } from "@/lib/webhooks";
+import { getPlanLimits } from "@/config/planLimits";
 
 // Plan limit check logic below
 
@@ -106,6 +108,9 @@ export async function POST(req: NextRequest) {
         isPinned: false,
       },
     });
+    
+    await fireWebhook(session.user.id, "board.duplicated", board);
+    
     return NextResponse.json({ board }, { status: 201 });
   }
 
@@ -115,6 +120,8 @@ export async function POST(req: NextRequest) {
   const board = await client.board.create({
     data: { name, description, ownerId: session.user.id, shapes: "[]" },
   });
+
+  await fireWebhook(session.user.id, "board.created", board);
 
   return NextResponse.json({ board }, { status: 201 });
 }

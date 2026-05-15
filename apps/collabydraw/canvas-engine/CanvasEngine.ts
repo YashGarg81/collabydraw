@@ -1090,6 +1090,48 @@ export class CanvasEngine {
       this.ctx.textBaseline = "middle";
       this.ctx.fillText("Web Embed", shape.x + shape.width / 2, shape.y + shape.height / 2);
       this.ctx.restore();
+    } else if (shape.type === "github_card" || shape.type === "jira_card") {
+      this.ctx.save();
+      this.ctx.fillStyle = "#ffffff";
+      this.ctx.strokeStyle = shape.type === "github_card" ? "#24292e" : "#0052cc";
+      this.ctx.lineWidth = 2;
+      this.ctx.beginPath();
+      this.ctx.roundRect ? this.ctx.roundRect(shape.x, shape.y, shape.width, shape.height, 8) : this.ctx.rect(shape.x, shape.y, shape.width, shape.height);
+      this.ctx.fill();
+      this.ctx.stroke();
+
+      this.ctx.fillStyle = shape.type === "github_card" ? "#24292e" : "#0052cc";
+      this.ctx.font = "bold 14px sans-serif";
+      this.ctx.textAlign = "left";
+      this.ctx.textBaseline = "top";
+      this.ctx.fillText(shape.type === "github_card" ? "GitHub Issue" : "Jira Issue", shape.x + 12, shape.y + 12);
+
+      this.ctx.fillStyle = "#333333";
+      this.ctx.font = "14px sans-serif";
+      // Auto wrap title
+      const titleLines = [];
+      let currentLine = "";
+      const words = shape.title.split(" ");
+      for (const word of words) {
+        if (this.ctx.measureText(currentLine + " " + word).width > shape.width - 24) {
+          titleLines.push(currentLine);
+          currentLine = word;
+        } else {
+          currentLine += (currentLine ? " " : "") + word;
+        }
+      }
+      titleLines.push(currentLine);
+
+      let textY = shape.y + 36;
+      for (const line of titleLines.slice(0, 3)) {
+        this.ctx.fillText(line, shape.x + 12, textY);
+        textY += 20;
+      }
+
+      this.ctx.fillStyle = "#555555";
+      this.ctx.font = "12px sans-serif";
+      this.ctx.fillText(`Status: ${shape.status}`, shape.x + 12, shape.y + shape.height - 24);
+      this.ctx.restore();
     }
   });
 
@@ -1473,6 +1515,13 @@ mouseDownHandler = (e: MouseEvent) => {
         userName: this.userName || "Guest",
         replies: []
     }]);
+    this.activeTool = "selection";
+  } else if (this.activeTool === "github_card" || this.activeTool === "jira_card") {
+    this.clicked = false;
+    const url = prompt(`Enter ${this.activeTool === "github_card" ? "GitHub" : "Jira"} Issue URL:`);
+    if (url) {
+      this.handleCardUpload(x, y, url, this.activeTool);
+    }
     this.activeTool = "selection";
   } else if (this.activeTool === "eraser") {
     this.eraser(x, y);
@@ -2570,6 +2619,65 @@ touchEndHandler = (e: TouchEvent) => {
   input.click();
   this.activeTool = "selection";
 }
+
+  private async handleCardUpload(x: number, y: number, url: string, type: "github_card" | "jira_card") {
+    // Show a loading text shape temporarily
+    const loadingId = uuidv4();
+    const loadingShape: Shape = {
+      id: loadingId,
+      type: "text",
+      x,
+      y,
+      width: 200,
+      height: 40,
+      text: "Loading integration...",
+      fontSize: "Medium",
+      fontFamily: "normal",
+      fontStyle: "normal",
+      textAlign: "center",
+      strokeFill: "#888",
+    };
+    this.existingShapes.push(loadingShape);
+    this.clearCanvas();
+
+    try {
+      const provider = type === "github_card" ? "github" : "jira";
+      const res = await fetch(`/api/integrations/${provider}?url=${encodeURIComponent(url)}`);
+      if (!res.ok) throw new Error("Failed to load");
+      const data = await res.json();
+
+      // Remove loading shape
+      this.existingShapes = this.existingShapes.filter(s => s.id !== loadingId);
+
+      const cardShape: Shape = {
+        id: uuidv4(),
+        type,
+        x,
+        y,
+        width: 320,
+        height: 120,
+        url: data.url || url,
+        title: data.title || "Unknown Issue",
+        status: data.status || "UNKNOWN",
+      };
+
+      this.saveState();
+      this.existingShapes.push(cardShape);
+      this.notifyShapeCountChange();
+
+      if (this.isStandalone) {
+        localStorage.setItem(LOCALSTORAGE_CANVAS_KEY, JSON.stringify(this.existingShapes));
+      } else if (this.sendMessage && this.roomId) {
+        this.sendMessage(JSON.stringify({ type: WsDataType.DRAW, id: cardShape.id, message: cardShape, roomId: this.roomId }));
+      }
+    } catch (e) {
+      console.error(e);
+      // Remove loading shape
+      this.existingShapes = this.existingShapes.filter(s => s.id !== loadingId);
+      alert("Failed to load integration card.");
+    }
+    this.clearCanvas();
+  }
 
   private processImageFile(file: File, x: number, y: number) {
   const reader = new FileReader();

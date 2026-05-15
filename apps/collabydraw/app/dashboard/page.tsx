@@ -299,6 +299,13 @@ export default function DashboardPage() {
             <Zap className="w-4 h-4" />
             Templates
           </Link>
+          <Link
+            href="/dashboard/integrations"
+            className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-white/40 hover:text-white/70 hover:bg-white/5 text-sm transition-colors"
+          >
+            <Globe className="w-4 h-4" />
+            Integrations & API
+          </Link>
           {/* Import JSON shortcut */}
           <button
             onClick={() => importRef.current?.click()}

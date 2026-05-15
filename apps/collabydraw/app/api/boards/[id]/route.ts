@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/utils/auth";
 import client from "@repo/db/client";
+import { fireWebhook } from "@/lib/webhooks";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -64,6 +65,8 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     },
   });
 
+  await fireWebhook(session.user.id, "board.updated", updated);
+
   return NextResponse.json({ board: updated });
 }
 
@@ -81,5 +84,6 @@ export async function DELETE(_req: NextRequest, { params }: Params) {
   }
 
   await client.board.delete({ where: { id } });
+  await fireWebhook(session.user.id, "board.deleted", { id });
   return NextResponse.json({ success: true });
 }

@@ -43,7 +43,9 @@ export type ToolType =
   | "lasso"
   | "frame"
   | "embed"
-  | "comment";
+  | "comment"
+  | "github_card"
+  | "jira_card";
 export type Tool = {
   type: ToolType;
   icon: React.ReactNode;
@@ -284,4 +286,26 @@ export type Shape = BaseShape & (
       width: number;
       height: number;
       url: string;
+    }
+  | {
+      id: string;
+      type: "github_card";
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+      url: string;
+      title: string;
+      status: string;
+    }
+  | {
+      id: string;
+      type: "jira_card";
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+      url: string;
+      title: string;
+      status: string;
     });

@@ -12,6 +12,7 @@ import {
     Monitor,
     Trash,
     LogOut,
+    Globe,
     CopyIcon,
     TrashIcon,
     DownloadIcon,
@@ -127,7 +128,10 @@ export function AppSidebar({ isOpen, onClose, canvasColor, setCanvasColor, isMob
                                 </>
                             )}
                             {session?.user && session?.user.id ? (
-                                <SidebarItem icon={LogOut} label="Log Out" onClick={() => signOut({ callbackUrl: '/' })} />
+                                <>
+                                    <SidebarItem icon={Globe} onClick={() => window.open('/dashboard/integrations', '_blank')} label="Integrations" />
+                                    <SidebarItem icon={LogOut} label="Log Out" onClick={() => signOut({ callbackUrl: '/' })} />
+                                </>
                             ) : (
                                 <div className="flex flex-col gap-1">
                                     <SidebarItem icon={LogIn} onClick={() => window.location.href = '/auth/signin'} label="Sign in" />

@@ -14,7 +14,9 @@ import {
     LassoSelect,
     Frame,
     PanelTop,
-    MessageCircle
+    MessageCircle,
+    Github,
+    Trello
 } from "lucide-react"
 import { Tool } from "./canvas";
 import { TextIcon } from "@/components/SvgIcons";
@@ -121,5 +123,17 @@ export const tools: Tool[] = [
         icon: <MessageCircle />,
         shortcut: "c",
         label: 'Comment'
+    },
+    {
+        type: "github_card",
+        icon: <Github />,
+        shortcut: "g",
+        label: 'GitHub Issue'
+    },
+    {
+        type: "jira_card",
+        icon: <Trello />, // Lucide doesn't have Jira, Trello is close enough
+        shortcut: "j",
+        label: 'Jira Issue'
     }
 ]

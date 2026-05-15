@@ -55,6 +55,10 @@ model User {
   subscriptions Subscription[]
   aiUsageLogs   AiUsage[]
 
+  apiKeys       ApiKey[]
+  webhooks      Webhook[]
+  integrations  Integration[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -255,6 +259,45 @@ model AiUsage {
   createdAt DateTime @default(now())
 
   @@index([userId])
+}
+
+// Phase 6: Ecosystem - API Keys
+model ApiKey {
+  id        String   @id @default(cuid())
+  key       String   @unique // Hashed or plain (plain for simplicity here, but should be hashed in prod)
+  name      String   @default("My API Key")
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lastUsedAt DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+// Phase 6: Ecosystem - Webhooks
+model Webhook {
+  id        String   @id @default(cuid())
+  url       String
+  secret    String?  // Optional secret to sign payloads
+  events    String   @default("[]") // JSON array of event types like ["board.created", "shape.added"]
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+// Phase 6: Ecosystem - Integrations (Slack, GitHub tokens, etc.)
+model Integration {
+  id        String   @id @default(cuid())
+  provider  String   // "slack", "github", "jira"
+  config    String   // JSON containing webhook URLs or tokens
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, provider])
 }
 
 
