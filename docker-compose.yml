@@ -28,8 +28,10 @@ services:
       - NODE_ENV=production
       - DATABASE_URL=postgresql://postgres:your_secure_password@database:5432/collabydraw
       - JWT_SECRET=your_secret_here
+      - REDIS_URL=redis://redis:6379
     depends_on:
       - database
+      - redis
 
   database:
     image: postgres:13-alpine
@@ -41,5 +43,16 @@ services:
     ports:
       - "5432:5432"
 
+  redis:
+    image: redis:7-alpine
+    container_name: collabydraw_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+
 volumes:
   postgres-data:
+  redis_data:

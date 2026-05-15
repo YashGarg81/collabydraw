@@ -1,4 +1,4 @@
-import { Metadata } from "next";
+﻿import { Metadata } from "next";
 
 export const baseMetadata: Metadata = {
   metadataBase: new URL("https://collabydraw.xyz"),
@@ -165,7 +165,7 @@ export const jsonLdSchemas = {
     },
     sameAs: [
       "https://twitter.com/1omsharma",
-      "https://github.com/coderomm/CollabyDraw",
+      "https://github.com/YashGarg81/collabydraw",
     ],
   },
 
@@ -190,3 +190,4 @@ export const jsonLdSchemas = {
     },
   },
 };
+

@@ -1,4 +1,4 @@
-"use client"
+﻿"use client"
 
 import type React from "react"
 
@@ -152,7 +152,7 @@ export function AppSidebar({ isOpen, onClose, canvasColor, setCanvasColor, isMob
                                     buttonVariants({ variant: "ghost" }),
                                     "flex flex-row items-center justify-start gap-2 h-10 w-auto rounded-md px-3 text-sm font-medium transition-colors text-white dark:text-black hover:text-color-on-surface bg-transparent hover:bg-button-hover-bg focus-visible:shadow-brand-color-shadow focus-visible:outline-none focus-visible:ring-0 active:bg-button-hover-bg active:border active:border-brand-active dark:hover:bg-w-button-hover-bg border border-[#705400] bg-[#FFE599]"
                                 )}
-                                href="https://github.com/coderomm/CollabyDraw"
+                                href="https://github.com/YashGarg81/collabydraw"
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 title="GitHub"

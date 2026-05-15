@@ -4,6 +4,7 @@ import React, { SetStateAction, useCallback, useEffect, useRef, useState } from 
 import { cn } from "@/lib/utils";
 import { useSession } from "next-auth/react";
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import Link from 'next/link';
 import { useTheme } from "next-themes";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { CanvasEngine } from "@/canvas-engine/CanvasEngine";
@@ -24,6 +25,14 @@ import SelectionContextMenu from "../SelectionContextMenu";
 import { HomeWelcome, MainMenuWelcome, ToolMenuWelcome } from "../welcome-screen";
 import EncryptedWidget from "../EncryptedWidget";
 import { AiDiagramPanel } from "../AiDiagramPanel";
+import { CommandPalette, buildCommands } from "../CommandPalette";
+import { ShortcutsOverlay } from "../ShortcutsOverlay";
+import { Minimap } from "../Minimap";
+import { AutoSaveIndicator, SaveStatus } from "../AutoSaveIndicator";
+import { AiBoardActions } from "../AiBoardActions";
+import { ShareModal } from "../ShareModal";
+import { VersionHistory } from "../VersionHistory";
+import { LiveCursors, useRemoteCursors } from "../LiveCursors";
 
 export default function CanvasBoard() {
     const { data: session, status } = useSession();
@@ -37,6 +46,28 @@ export default function CanvasBoard() {
     const [isConnected, setIsConnected] = useState(false);
     const [isCanvasReady, setIsCanvasReady] = useState(false);
     const initializedWithMode = useRef<Mode | null>(null);
+
+    // ── Phase 2: Command Palette + Shortcuts + Autosave ────────────────────
+    const [cmdOpen, setCmdOpen] = useState(false);
+    const [shortcutsOpen, setShortcutsOpen] = useState(false);
+    const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
+    const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
+    const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const [canvasShapes, setCanvasShapes] = useState<import("@/types/canvas").Shape[]>([]);
+    const [viewportOffset, setViewportOffset] = useState({ x: 0, y: 0 });
+    const [windowSize, setWindowSize] = useState({ w: 0, h: 0 });
+    // ── Phase 4: Share modal ─────────────────────────────────────────────────
+    const [shareOpen, setShareOpen] = useState(false);
+    const [boardId, setBoardId] = useState<string | null>(null);
+    const [boardIsPublic, setBoardIsPublic] = useState(false);
+    const [boardName, setBoardName] = useState("Untitled Board");
+    // ── Phase 5: Version history + live cursors ─────────────────────────────
+    const [versionHistoryOpen, setVersionHistoryOpen] = useState(false);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const [remoteCursors, setRemoteCursors] = useState<Map<string, any>>(new Map());
+    const { cursorsRef, updateCursor, renderRef } = useRemoteCursors();
+    const autosaveCountRef = useRef(0);
+    renderRef.current = () => setRemoteCursors(new Map(cursorsRef.current));
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const currentHashRef = useRef<string>('');
     const [canvasEngineState, setCanvasEngineState] = useState({
@@ -190,6 +221,31 @@ export default function CanvasBoard() {
         canvasEngineState.snapToGrid
     ]);
 
+    // Ctrl+K → command palette; ? → shortcuts (only when not typing)
+    useEffect(() => {
+        const handler = (e: KeyboardEvent) => {
+            const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+            const isTyping = tag === 'input' || tag === 'textarea' || (e.target as HTMLElement)?.isContentEditable;
+            if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+                e.preventDefault();
+                setCmdOpen(prev => !prev);
+            }
+            if (e.key === '?' && !isTyping && !cmdOpen) {
+                setShortcutsOpen(prev => !prev);
+            }
+        };
+        window.addEventListener('keydown', handler);
+        return () => window.removeEventListener('keydown', handler);
+    }, [cmdOpen]);
+
+    // Track window size for minimap
+    useEffect(() => {
+        const update = () => setWindowSize({ w: window.innerWidth, h: window.innerHeight });
+        update();
+        window.addEventListener('resize', update);
+        return () => window.removeEventListener('resize', update);
+    }, []);
+
     const handleKeyDown = useCallback((e: KeyboardEvent) => {
         const toolKeyMap: Record<string, ToolType> = {
             "1": "selection",
@@ -249,6 +305,33 @@ export default function CanvasBoard() {
                 ...prev,
                 isCanvasEmpty: count === 0
             }));
+            // Sync shapes for minimap
+            setCanvasShapes(engine.getShapes());
+            // Trigger autosave
+            if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
+            autosaveTimerRef.current = setTimeout(async () => {
+                const bid = new URLSearchParams(window.location.search).get('board');
+                if (!bid) return;
+                const shapes = engine.getShapes();
+                setSaveStatus('saving');
+                try {
+                    const res = await fetch(`/api/boards/${bid}`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ shapes }),
+                    });
+                    if (res.ok) {
+                        setSaveStatus('saved');
+                        setLastSavedAt(new Date());
+                        // Phase 5: auto-snapshot every 20 saves
+                        autosaveCountRef.current += 1;
+                        if (autosaveCountRef.current % 20 === 0) {
+                            fetch(`/api/boards/${bid}/snapshots`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) }).catch(() => {});
+                        }
+                    }
+                    else setSaveStatus('error');
+                } catch { setSaveStatus('error'); }
+            }, 2000);
         });
         engine.setOnSelectionChange((isSelected: boolean, count?: number, isGrouped?: boolean) => {
             setCanvasEngineState(prev => ({
@@ -259,6 +342,10 @@ export default function CanvasBoard() {
             }));
         });
         engine.onViewChange = (embeds, panX, panY, scale) => {
+            // Update viewport offset for minimap indicator
+            setViewportOffset({ x: panX, y: panY });
+            // Sync shapes on every view change (pan/zoom can reveal moved shapes)
+            setCanvasShapes(engine.getShapes());
             setCanvasEngineState(prev => {
                 if (
                     prev.embedData.panX === panX &&
@@ -283,8 +370,12 @@ export default function CanvasBoard() {
                 activeTool: tool
             }));
         };
+        // Phase 5: live cursor overlay
+        engine.onCursorUpdate = (userId, userName, x, y) => {
+            updateCursor(userId, userName, x, y);
+        };
         return engine;
-    }, [canvasEngineState.canvasColor, mode, theme]);
+    }, [canvasEngineState.canvasColor, mode, theme, updateCursor]);
 
     useEffect(() => {
         if (!isCanvasReady) return;
@@ -299,6 +390,8 @@ export default function CanvasBoard() {
                 if (engine) {
                     initializedWithMode.current = mode;
                     setCanvasEngineState(prev => ({ ...prev, engine }));
+                    // Sync shapes that were loaded from localStorage on init
+                    setCanvasShapes(engine.getShapes());
 
                     const handleResize = () => {
                         if (canvasRef.current) {
@@ -324,6 +417,21 @@ export default function CanvasBoard() {
             return () => clearTimeout(waitReaddy);
         }
     }, [handleKeyDown, initializeCanvasEngine, isCanvasReady, isConnected, mode, canvasEngineState.engine]);
+
+    // Load board data (shapes + meta) on initial mount
+    useEffect(() => {
+        const bid = new URLSearchParams(window.location.search).get('board');
+        if (!bid || !canvasEngineState.engine) return;
+        setBoardId(bid);
+        fetch(`/api/boards/${bid}`).then(async res => {
+            if (res.ok) {
+                const data = await res.json();
+                if (data.board?.name) setBoardName(data.board.name);
+                if (data.board?.isPublic !== undefined) setBoardIsPublic(data.board.isPublic);
+            }
+        });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [canvasEngineState.engine]);
 
     const clearCanvas = useCallback(() => {
         canvasEngineState.engine?.clearAllShapes();
@@ -362,7 +470,17 @@ export default function CanvasBoard() {
             <div className="App_Menu App_Menu_Top fixed z-[4] top-4 right-4 left-4 flex justify-center items-center xs670:grid xs670:grid-cols-[1fr_auto_1fr] xs670:gap-4 md:gap-8 xs670:items-start">
                 {matches && (
                     <div className="Main_Menu_Stack Sidebar_Trigger_Button xs670:grid xs670:gap-[calc(.25rem*6)] grid-cols-[auto] grid-flow-row grid-rows auto-rows-min justify-self-start">
-                        <div className="relative">
+                        <div className="relative flex items-center gap-1.5">
+                            <Link
+                                href="/dashboard"
+                                title="Go to Dashboard"
+                                className="flex items-center justify-center w-8 h-8 rounded-lg border border-white/10 bg-[#232329] hover:bg-violet-600/20 hover:border-violet-500/30 text-white/50 hover:text-violet-400 transition-all duration-200 group"
+                            >
+                                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 9.5L12 3l9 6.5V20a1 1 0 01-1 1H5a1 1 0 01-1-1V9.5z" />
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 21V12h6v9" />
+                                </svg>
+                            </Link>
                             <AppMenuButton onClick={toggleSidebar} />
 
                             {canvasEngineState.sidebarOpen && (
@@ -448,7 +566,35 @@ export default function CanvasBoard() {
                 />
 
                 {matches && (
-                    <CollaborationToolbar participants={participants} hash={currentHashRef.current} />
+                    <div className="flex items-center gap-2">
+                        <CollaborationToolbar participants={participants} hash={currentHashRef.current} />
+                        {/* Version History button */}
+                        {boardId && (
+                            <button
+                                onClick={() => setVersionHistoryOpen(true)}
+                                title="Version History"
+                                className="flex items-center gap-1.5 h-8 px-3 rounded-lg border border-white/10 bg-[#232329] hover:bg-[#31303b] text-white/60 hover:text-white/90 text-xs font-medium transition-all"
+                            >
+                                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                </svg>
+                                History
+                            </button>
+                        )}
+                        {/* Share button */}
+                        {boardId && (
+                            <button
+                                onClick={() => setShareOpen(true)}
+                                title="Share board"
+                                className="flex items-center gap-1.5 h-8 px-3 rounded-lg border border-white/10 bg-[#232329] hover:bg-[#31303b] text-white/60 hover:text-white/90 text-xs font-medium transition-all"
+                            >
+                                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+                                </svg>
+                                Share
+                            </button>
+                        )}
+                    </div>
                 )}
             </div>
 
@@ -473,8 +619,53 @@ export default function CanvasBoard() {
                         setSnapToGrid={(snap: boolean) => setCanvasEngineState(prev => ({ ...prev, snapToGrid: snap }))}
                     />
                     <AiDiagramPanel engine={canvasEngineState.engine} />
+                    <AiBoardActions engine={canvasEngineState.engine} />
+                    {/* Autosave indicator */}
+                    <AutoSaveIndicator status={saveStatus} lastSavedAt={lastSavedAt} />
+                    {/* Shortcuts hint */}
+                    <button
+                        onClick={() => setShortcutsOpen(true)}
+                        title="Keyboard shortcuts (?)"
+                        className="w-7 h-7 rounded-lg border border-white/10 bg-[#232329] hover:bg-[#31303b] text-white/40 hover:text-white/80 flex items-center justify-center text-xs font-bold transition-colors"
+                    >
+                        ?
+                    </button>
                 </div>
             )}
+
+            {/* Minimap — bottom right */}
+            {matches && (
+                <div className="fixed z-[4] bottom-4 right-4">
+                    <Minimap
+                        shapes={canvasShapes}
+                        scale={canvasEngineState.scale}
+                        offsetX={viewportOffset.x}
+                        offsetY={viewportOffset.y}
+                        canvasWidth={windowSize.w}
+                        canvasHeight={windowSize.h}
+                    />
+                </div>
+            )}
+
+            {/* Command Palette */}
+            <CommandPalette
+                open={cmdOpen}
+                onClose={() => setCmdOpen(false)}
+                commands={buildCommands({
+                    setTool: (t) => setCanvasEngineState(prev => ({ ...prev, activeTool: t as ToolType })),
+                    undo: () => canvasEngineState.engine?.undo(),
+                    redo: () => canvasEngineState.engine?.redo(),
+                    exportPNG: () => canvasEngineState.engine?.exportToPNG(),
+                    clearCanvas,
+                    setScale: (s) => handleScaleUpdate((prev) => prev * s),
+                    toggleGrid: () => setCanvasEngineState(prev => ({ ...prev, snapToGrid: !prev.snapToGrid })),
+                    openShortcuts: () => { setCmdOpen(false); setShortcutsOpen(true); },
+                    openAI: () => { /* trigger AI panel */ },
+                })}
+            />
+
+            {/* Keyboard Shortcuts Overlay */}
+            <ShortcutsOverlay open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
 
             {canvasEngineState.isShapeSelected && matches && (
                 <SelectionContextMenu
@@ -610,6 +801,45 @@ export default function CanvasBoard() {
             })}
 
             <canvas className={cn("collabydraw collabydraw-canvas touch-none", theme === 'dark' ? 'collabydraw-canvas-dark' : '')} ref={canvasRef} />
+
+            {/* Phase 5: Live remote cursor overlay (room mode only) */}
+            {mode === 'room' && (
+                <LiveCursors
+                    cursors={remoteCursors}
+                    panX={canvasEngineState.embedData.panX}
+                    panY={canvasEngineState.embedData.panY}
+                    scale={canvasEngineState.scale}
+                />
+            )}
+
+            {/* Share Modal — Phase 4 + enhanced in Phase 5 */}
+            {shareOpen && boardId && (
+                <ShareModal
+                    boardId={boardId}
+                    boardName={boardName}
+                    isPublic={boardIsPublic}
+                    onClose={() => setShareOpen(false)}
+                    onTogglePublic={(val) => setBoardIsPublic(val)}
+                    onExport={() => canvasEngineState.engine?.exportToPNG()}
+                    onExportSVG={() => canvasEngineState.engine?.exportToSVG()}
+                    onExportJSON={() => canvasEngineState.engine?.exportToJSON()}
+                    onCopyClipboard={() => canvasEngineState.engine?.copyPNGToClipboard() ?? Promise.resolve(false)}
+                />
+            )}
+
+            {/* Version History — Phase 5 */}
+            {versionHistoryOpen && boardId && (
+                <VersionHistory
+                    boardId={boardId}
+                    onClose={() => setVersionHistoryOpen(false)}
+                    onRestore={(shapes) => {
+                        canvasEngineState.engine?.clearAllShapes();
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        canvasEngineState.engine?.addShapes(shapes as any[]);
+                        setVersionHistoryOpen(false);
+                    }}
+                />
+            )}
         </div >
     )
 };

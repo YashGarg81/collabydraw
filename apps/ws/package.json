@@ -3,9 +3,10 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "build": "npx esbuild src/index.ts --bundle --outfile=dist/index.js --platform=node --tsconfig=tsconfig.json",
+    "build": "npx esbuild src/index.ts --bundle --outfile=dist/index.js --platform=node --tsconfig=tsconfig.json --external:ioredis",
     "start": "node dist/index.js",
     "dev": "pnpm run build && pnpm run start",
+    "dev:ts": "npx tsx src/index.ts",
     "start:ws": "cd apps/ws && pnpm run build && pnpm run start"
   },
   "devDependencies": {
@@ -27,6 +28,7 @@
     "cookie": "^1.0.2",
     "dotenv": "^16.4.7",
     "esbuild": "^0.25.1",
+    "ioredis": "^5.4.1",
     "jsonwebtoken": "^9.0.2",
     "uuid": "^11.1.0",
     "ws": "^8.18.0"

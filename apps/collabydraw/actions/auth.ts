@@ -15,9 +15,7 @@ export async function signUp(values: z.infer<typeof SignupSchema>) {
     const { name, email, password } = validatedFields.data;
 
     const existingUser = await client.user.findFirst({
-        where: {
-            OR: [{ email }, { name }]
-        }
+        where: { email }
     });
 
     if (existingUser) {

@@ -160,6 +160,8 @@ export class CanvasEngine {
 
   public onViewChange?: (embeds: Shape[], panX: number, panY: number, scale: number) => void;
   public onToolChangeCallback?: (tool: ToolType) => void;
+  // Phase 5: cursor presence overlay
+  public onCursorUpdate?: (userId: string, userName: string, x: number, y: number) => void;
 
   public triggerViewChange() {
       if (this.onViewChange) {
@@ -324,6 +326,8 @@ export class CanvasEngine {
               }
 
               this.clearCanvas();
+              // Phase 5: fire React overlay callback for LiveCursors component
+              this.onCursorUpdate?.(data.userId, data.userName ?? data.userId, coords.x, coords.y);
             }
             break;
 
@@ -3209,6 +3213,12 @@ clearAllShapes() {
   }
 }
 
+/** Returns a snapshot of the current shapes — used by minimap and autosave */
+getShapes(): Shape[] {
+  return [...this.existingShapes];
+}
+
+
 handleResize(width: number, height: number) {
   this.canvas.width = width;
   this.canvas.height = height;
@@ -3655,7 +3665,161 @@ public ungroupSelected() {
     this.syncAllShapes();
   }
 
+  // Phase 3C: Apply layout — bulk-update x/y positions returned by AI manipulate API.
+  // Matches shapes by id; shapes not found in the update are left untouched.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  public applyLayout(updatedShapes: any[]) {
+    if (!updatedShapes || updatedShapes.length === 0) return;
+    this.undoStack.push(JSON.parse(JSON.stringify(this.existingShapes)));
+    if (this.undoStack.length > 50) this.undoStack.shift();
+    this.redoStack = [];
+
+    // Build a lookup from id → updated position
+    const posMap = new Map<string, { x?: number; y?: number }>();
+    for (const s of updatedShapes) {
+      if (s.id) posMap.set(s.id, { x: s.x, y: s.y });
+    }
+
+    this.existingShapes = this.existingShapes.map(s => {
+      const update = s.id ? posMap.get(s.id as string) : undefined;
+      if (!update) return s;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const updated = { ...s } as any;
+      if (update.x != null) updated.x = update.x;
+      if (update.y != null) updated.y = update.y;
+      return updated as Shape;
+    });
+
+    this.clearCanvas();
+    this.syncAllShapes();
+  }
+
+
+
+  // Phase 5: Export shapes as a portable JSON file
+  public exportToJSON() {
+    if (this.existingShapes.length === 0) return;
+    const json = JSON.stringify(this.existingShapes, null, 2);
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.download = `collabydraw-board-${Date.now()}.json`;
+    link.href = url;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // Phase 5: Copy board as PNG to clipboard
+  public async copyPNGToClipboard(): Promise<boolean> {
+    if (this.existingShapes.length === 0) return false;
+    try {
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      this.existingShapes.forEach(shape => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const s = shape as any;
+        const pad = 20;
+        if (s.type === 'free-draw' && s.points) {
+          s.points.forEach((p: {x:number;y:number}) => {
+            minX = Math.min(minX, p.x - pad); minY = Math.min(minY, p.y - pad);
+            maxX = Math.max(maxX, p.x + pad); maxY = Math.max(maxY, p.y + pad);
+          });
+        } else {
+          if (s.x == null) return;
+          minX = Math.min(minX, s.x - pad); minY = Math.min(minY, s.y - pad);
+          const x2 = s.toX ?? (s.x + (s.width || 0));
+          const y2 = s.toY ?? (s.y + (s.height || 0));
+          maxX = Math.max(maxX, x2 + pad); maxY = Math.max(maxY, y2 + pad);
+        }
+      });
+      const w = maxX - minX; const h = maxY - minY;
+      if (w <= 0 || h <= 0) return false;
+
+      const tmp = document.createElement("canvas");
+      tmp.width = w; tmp.height = h;
+      const tmpCtx = tmp.getContext("2d");
+      if (!tmpCtx) return false;
+
+      const oldCanvas = this.canvas, oldCtx = this.ctx, oldRough = this.roughCanvas;
+      const oldPanX = this.panX, oldPanY = this.panY, oldScale = this.scale;
+      const oldSel = [...this.SelectionController.getSelectedShapes()];
+      this.SelectionController.setSelectedShapes([]);
+      this.canvas = tmp; this.ctx = tmpCtx;
+      this.roughCanvas = rough.canvas(tmp);
+      this.panX = -minX; this.panY = -minY; this.scale = 1;
+      this.clearCanvas();
+      const dataUrl = tmp.toDataURL("image/png");
+      this.canvas = oldCanvas; this.ctx = oldCtx; this.roughCanvas = oldRough;
+      this.panX = oldPanX; this.panY = oldPanY; this.scale = oldScale;
+      this.SelectionController.setSelectedShapes(oldSel);
+      this.clearCanvas();
+
+      const res = await fetch(dataUrl);
+      const blob = await res.blob();
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+      return true;
+    } catch (e) {
+      console.error("copyPNGToClipboard failed:", e);
+      return false;
+    }
+  }
+
+  // Phase 5: Export as SVG (vector approximation)
+  public exportToSVG() {
+    if (this.existingShapes.length === 0) return;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    this.existingShapes.forEach(shape => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const s = shape as any;
+      const pad = 20;
+      if (s.x == null) return;
+      minX = Math.min(minX, s.x - pad); minY = Math.min(minY, s.y - pad);
+      maxX = Math.max(maxX, (s.toX ?? s.x + (s.width || 100)) + pad);
+      maxY = Math.max(maxY, (s.toY ?? s.y + (s.height || 60)) + pad);
+    });
+    const vw = maxX - minX; const vh = maxY - minY;
+    if (vw <= 0 || vh <= 0) return;
+
+    const svgParts: string[] = [];
+    this.existingShapes.forEach(shape => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const s = shape as any;
+      const x = (s.x ?? 0) - minX; const y = (s.y ?? 0) - minY;
+      const stroke = s.strokeFill ?? "#ffffff";
+      const fill = (s.bgFill && s.bgFill !== "transparent" && s.bgFill !== "#00000000") ? s.bgFill : "none";
+      const sw = s.strokeWidth ?? 1.5;
+      switch (s.type) {
+        case "rectangle":
+          svgParts.push(`<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${(s.width||120).toFixed(1)}" height="${(s.height||60).toFixed(1)}" rx="${s.rounded === 'round' ? 8 : 0}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"/>`);
+          break;
+        case "ellipse":
+          svgParts.push(`<ellipse cx="${(x+(s.radX??60)).toFixed(1)}" cy="${(y+(s.radY??40)).toFixed(1)}" rx="${(s.radX??60).toFixed(1)}" ry="${(s.radY??40).toFixed(1)}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"/>`);
+          break;
+        case "line":
+        case "arrow": {
+          const tx = (s.toX??s.x+100)-minX; const ty = (s.toY??s.y)-minY;
+          svgParts.push(`<line x1="${x.toFixed(1)}" y1="${y.toFixed(1)}" x2="${tx.toFixed(1)}" y2="${ty.toFixed(1)}" stroke="${stroke}" stroke-width="${sw}"${s.type==='arrow'?' marker-end="url(#arr)"':''}/>`);
+          break;
+        }
+        case "text":
+          svgParts.push(`<text x="${x.toFixed(1)}" y="${(y+16).toFixed(1)}" fill="${stroke}" font-size="14" font-family="sans-serif">${(s.text??"").replace(/&/g,"&amp;").replace(/</g,"&lt;")}</text>`);
+          break;
+        default: break;
+      }
+    });
+
+    const svg = `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${vw.toFixed(0)}" height="${vh.toFixed(0)}" viewBox="0 0 ${vw.toFixed(0)} ${vh.toFixed(0)}">\n  <defs><marker id="arr" markerWidth="8" markerHeight="6" refX="6" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#fff"/></marker></defs>\n  <rect width="100%" height="100%" fill="#0a0a0f"/>\n  ${svgParts.join("\n  ")}\n</svg>`;
+
+    const blob = new Blob([svg], { type: "image/svg+xml" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.download = `collabydraw-board-${Date.now()}.svg`;
+    link.href = url;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
   private syncAllShapes() {
+
   if (this.isStandalone) {
     try {
       localStorage.setItem(

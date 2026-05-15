@@ -1,15 +1,14 @@
 /**
- * Wave 8: AI Diagram Generation API Route
+ * Phase 3A: AI Diagram Generation — with credit enforcement
  * POST /api/ai/diagram
- *
- * Accepts a natural-language prompt and calls Google Gemini
- * to return a structured CollabyDraw Shape array.
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/utils/auth";
+import client from "@repo/db/client";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-
-// ─── System prompt with full Shape schema ──────────────────────────────────────
+import { getPlanLimits } from "@/config/planLimits";
 
 const SYSTEM_PROMPT = `You are a diagramming assistant for CollabyDraw, a collaborative drawing canvas app.
 
@@ -51,10 +50,33 @@ Your job is to convert a natural language description into a JSON array of shape
 
 Respond with ONLY the JSON array.`;
 
-// ─── Route handler ─────────────────────────────────────────────────────────────
-
 export async function POST(req: NextRequest) {
   try {
+    // ── Auth ─────────────────────────────────────────────────────────
+    const session = await getServerSession(authOptions);
+    const userId = session?.user?.id ?? null;
+
+    // ── AI credit check (authenticated users only) ────────────────────
+    if (userId) {
+      const user = await client.user.findUnique({
+        where: { id: userId },
+        select: { plan: true, aiCredits: true },
+      });
+      const limits = getPlanLimits(user?.plan ?? "FREE");
+
+      if (limits.aiCreditsMonthly !== Infinity && (user?.aiCredits ?? 0) <= 0) {
+        return NextResponse.json(
+          {
+            error: "NO_AI_CREDITS",
+            message: `You've used all your AI credits for this period. Upgrade to Pro for 100 credits/month.`,
+            plan: user?.plan ?? "FREE",
+            credits: 0,
+          },
+          { status: 402 }
+        );
+      }
+    }
+
     const body = await req.json();
     const { prompt } = body as { prompt?: string };
 
@@ -79,7 +101,6 @@ export async function POST(req: NextRequest) {
     const result = await model.generateContent(prompt.trim());
     const text = result.response.text().trim();
 
-    // Strip any accidental markdown code fences
     const cleaned = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
 
     let shapes;
@@ -100,18 +121,31 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // ── Decrement credits on success ──────────────────────────────────
+    if (userId) {
+      const user = await client.user.findUnique({
+        where: { id: userId },
+        select: { plan: true },
+      });
+      const limits = getPlanLimits(user?.plan ?? "FREE");
+      if (limits.aiCreditsMonthly !== Infinity) {
+        await client.user.update({
+          where: { id: userId },
+          data: { aiCredits: { decrement: 1 } },
+        });
+      }
+    }
+
     return NextResponse.json({ shapes });
   } catch (err) {
     console.error("AI diagram generation error:", err);
 
-    // Detect rate-limit (429) specifically
     const errStr = String(err);
     if (errStr.includes("429") || errStr.includes("Too Many Requests") || errStr.includes("quota")) {
-      // Try to extract retry delay from the error message
       const retryMatch = errStr.match(/retry[^\d]*(\d+)/i);
       const retrySec = retryMatch ? Math.ceil(Number(retryMatch[1])) : 60;
       return NextResponse.json(
-        { error: `Rate limit reached — the free Gemini quota was exceeded. Please wait ~${retrySec}s and try again.` },
+        { error: `Rate limit reached — please wait ~${retrySec}s and try again.` },
         { status: 429 }
       );
     }

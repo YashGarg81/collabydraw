@@ -119,3 +119,15 @@ model Shape {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
+
+// Phase 5: Board version history — auto-snapshots of shapes JSON
+model BoardSnapshot {
+  id        String   @id @default(cuid())
+  boardId   String
+  shapes    String   // JSON stringified shapes at this point in time
+  label     String?  // optional user-facing label e.g. "Before AI layout"
+  shapeCount Int     @default(0)
+  createdAt DateTime @default(now())
+
+  @@index([boardId, createdAt])
+}

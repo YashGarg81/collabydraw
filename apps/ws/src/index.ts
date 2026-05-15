@@ -1,592 +1,482 @@
+/**
+ * Phase 3B: WebSocket Server with Redis Pub/Sub
+ *
+ * Architecture:
+ *   - Each WS instance subscribes to Redis channels for rooms it hosts connections in
+ *   - Outgoing messages are PUBLISHED to Redis ("room:{id}"), not broadcast in-memory
+ *   - Redis fan-out delivers to all WS instances → they forward to their local clients
+ *   - Room shape state is stored in Redis Hash ("shapes:{roomId}") for instant replay on JOIN
+ *   - Gracefully falls back to in-memory broadcast if Redis is unavailable
+ */
+
 import dotenv from "dotenv";
 dotenv.config();
 import client from "@repo/db/client";
 import { WebSocketMessage, WsDataType } from "@repo/common/types";
 import { WebSocketServer, WebSocket } from "ws";
 import jwt, { JwtPayload } from "jsonwebtoken";
+import Redis from "ioredis";
 
 if (!process.env.JWT_SECRET) {
   throw new Error("JWT_SECRET is ABSOLUTELY REQUIRED and not set");
 }
-
 const JWT_SECRET = process.env.JWT_SECRET;
+const REDIS_URL = process.env.REDIS_URL || "redis://localhost:6379";
 
-declare module "http" {
-  interface IncomingMessage {
-    user: {
-      id: string;
-      email: string;
-    };
-  }
+// ── Redis clients ─────────────────────────────────────────────────────────────
+// Separate clients required: a subscribed client cannot issue non-subscribe commands
+let pub: Redis | null = null;
+let sub: Redis | null = null;
+let redisAvailable = false;
+
+function createRedisClient(name: string): Redis {
+  const r = new Redis(REDIS_URL, {
+    lazyConnect: true,
+    retryStrategy: (times) => (times > 3 ? null : Math.min(times * 200, 1000)),
+  });
+  r.on("connect", () => { console.log(`✅ Redis ${name} connected`); redisAvailable = true; });
+  r.on("error",   (e) => { console.warn(`⚠️  Redis ${name} error (falling back to in-memory):`, e.message); redisAvailable = false; });
+  return r;
 }
 
-const wss = new WebSocketServer({ port: Number(process.env.PORT) || 8080 });
-
-function authUser(token: string) {
+async function initRedis() {
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
-    if (typeof decoded == "string") {
-      console.error("Decoded token is a string, expected object");
-      return null;
-    }
-    if (!decoded.id) {
-      console.error("No valid user ID in token");
-      return null;
-    }
-    return decoded.id;
-  } catch (err) {
-    console.error("JWT verification failed:", err);
-    return null;
+    pub = createRedisClient("pub");
+    sub = createRedisClient("sub");
+    await pub.connect();
+    await sub.connect();
+    redisAvailable = true;
+  } catch (e) {
+    console.warn("Redis not available — running in single-node in-memory mode:", e);
+    redisAvailable = false;
   }
 }
 
+// ── In-memory state ───────────────────────────────────────────────────────────
 type Connection = {
   connectionId: string;
   userId: string;
   userName: string;
   ws: WebSocket;
-  rooms: string[];
+  rooms: Set<string>;
 };
 
-const connections: Connection[] = [];
-const roomShapes: Record<string, WebSocketMessage[]> = {};
+const connections = new Map<string, Connection>();
+// Fallback in-memory shape store (used when Redis is down)
+const memShapes: Record<string, WebSocketMessage[]> = {};
+// Track which Redis channels this server instance is subscribed to
+const subscribedChannels = new Set<string>();
 
-function generateConnectionId(): string {
-  return `conn_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function channelFor(roomId: string) { return `room:${roomId}`; }
+function shapesKeyFor(roomId: string) { return `shapes:${roomId}`; }
+
+function authUser(token: string): string | null {
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
+    return typeof decoded === "string" || !decoded.id ? null : decoded.id;
+  } catch {
+    return null;
+  }
 }
 
-wss.on("connection", function connection(ws, req) {
-  const url = req.url;
-  if (!url) {
-    console.error("No valid URL found in request");
-    return;
+function generateConnectionId() {
+  return `conn_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function getCurrentParticipants(roomId: string) {
+  const map = new Map<string, { userId: string; userName: string }>();
+  for (const conn of connections.values()) {
+    if (conn.rooms.has(roomId)) {
+      map.set(conn.userId, { userId: conn.userId, userName: conn.userName });
+    }
   }
-  const queryParams = new URLSearchParams(url.split("?")[1]);
-  const token = queryParams.get("token");
-  if (!token || token === null) {
-    console.error("No valid token found in query params");
-    ws.close(1008, "User not authenticated");
-    return;
-  }
-  const userId = authUser(token);
-  if (!userId) {
-    console.error("Connection rejected: invalid user");
-    ws.close(1008, "User not authenticated");
-    return;
-  }
+  return Array.from(map.values());
+}
 
-  const connectionId = generateConnectionId();
-  const newConnection: Connection = {
-    connectionId,
-    userId,
-    userName: userId,
-    ws,
-    rooms: [],
-  };
-  connections.push(newConnection);
+// ── Shape persistence helpers ─────────────────────────────────────────────────
 
-  ws.send(
-    JSON.stringify({
-      type: WsDataType.CONNECTION_READY,
-      connectionId,
-    })
-  );
-  console.log("✅ Sent CONNECTION_READY to:", connectionId);
-
-  ws.on("error", (err) =>
-    console.error(`WebSocket error for user ${userId}:`, err)
-  );
-
-  ws.on("message", async function message(data) {
+async function getShapes(roomId: string): Promise<WebSocketMessage[]> {
+  if (redisAvailable && pub) {
     try {
-      const parsedData: WebSocketMessage = JSON.parse(data.toString());
-      if (!parsedData) {
-        console.error("Error in parsing ws data");
-        return;
-      }
+      const hash = await pub.hgetall(shapesKeyFor(roomId));
+      return Object.values(hash || {}).map(v => JSON.parse(v));
+    } catch { /* fall through */ }
+  }
+  return memShapes[roomId] || [];
+}
 
-      if (!parsedData.roomId || !parsedData.userId) {
-        console.error("No userId or roomId provided for WS message");
-        return;
-      }
+async function upsertShape(roomId: string, shape: WebSocketMessage) {
+  if (!shape.id) return;
+  if (redisAvailable && pub) {
+    try {
+      await pub.hset(shapesKeyFor(roomId), shape.id, JSON.stringify(shape));
+      return;
+    } catch { /* fall through */ }
+  }
+  if (!memShapes[roomId]) memShapes[roomId] = [];
+  const idx = memShapes[roomId].findIndex(s => s.id === shape.id);
+  if (idx !== -1) memShapes[roomId][idx] = shape;
+  else memShapes[roomId].push(shape);
+}
 
-      const connection = connections.find(
-        (x) => x.connectionId === connectionId
-      );
-      if (!connection) {
-        console.error("No connection found");
-        ws.close();
-        return;
-      }
+async function deleteShape(roomId: string, shapeId: string) {
+  if (redisAvailable && pub) {
+    try { await pub.hdel(shapesKeyFor(roomId), shapeId); return; } catch { /* fall through */ }
+  }
+  if (memShapes[roomId]) {
+    memShapes[roomId] = memShapes[roomId].filter(s => s.id !== shapeId);
+  }
+}
 
-      if (parsedData.userName && connection.userName === userId) {
-        // Update username for this connection
-        connection.userName = parsedData.userName;
+async function clearRoomShapes(roomId: string) {
+  if (redisAvailable && pub) {
+    try { await pub.del(shapesKeyFor(roomId)); return; } catch { /* fall through */ }
+  }
+  delete memShapes[roomId];
+}
 
-        // Sync username across all connections for this user
-        connections
-          .filter((conn) => conn.userId === userId)
-          .forEach((conn) => {
-            conn.userName = parsedData.userName ?? parsedData.userId;
-          });
-      }
+// ── Broadcast via Redis (or in-memory fallback) ───────────────────────────────
 
-      switch (parsedData.type) {
-        case WsDataType.JOIN:
-          {
-            const roomCheckResponse = await client.room.findUnique({
-              where: { id: parsedData.roomId },
-            });
-
-            if (!roomCheckResponse) {
-              ws.close();
-              return;
-            }
-
-            if (!connection.rooms.includes(parsedData.roomId)) {
-              connection.rooms.push(parsedData.roomId);
-            }
-
-            const participants = getCurrentParticipants(parsedData.roomId);
-
-            if (!roomShapes[parsedData.roomId]) {
-              roomShapes[parsedData.roomId] = [];
-            }
-
-            ws.send(
-              JSON.stringify({
-                type: WsDataType.USER_JOINED,
-                roomId: parsedData.roomId,
-                userId: connection.userId,
-                userName: connection.userName,
-                connectionId: connection.connectionId,
-                participants,
-                timestamp: new Date().toISOString(),
-              })
-            );
-
-            const shapes = roomShapes[parsedData.roomId] || [];
-
-            if (shapes && shapes.length > 0) {
-              ws.send(
-                JSON.stringify({
-                  type: WsDataType.EXISTING_SHAPES,
-                  roomId: parsedData.roomId,
-                  message: shapes,
-                  timestamp: new Date().toISOString(),
-                })
-              );
-            }
-
-            // Don't broadcast JOIN to the user's other tabs if this is a duplicate tab
-            const isFirstTabInRoom = connections
-              .filter(
-                (conn) =>
-                  conn.userId === connection.userId &&
-                  conn.connectionId !== connection.connectionId
-              )
-              .every((conn) => !conn.rooms.includes(parsedData.roomId));
-
-            if (isFirstTabInRoom) {
-              broadcastToRoom(
-                parsedData.roomId,
-                {
-                  type: WsDataType.USER_JOINED,
-                  roomId: parsedData.roomId,
-                  userId: connection.userId,
-                  userName: connection.userName,
-                  connectionId: connection.connectionId,
-                  participants,
-                  timestamp: new Date().toISOString(),
-                  id: null,
-                  message: null,
-                },
-                [connection.connectionId],
-                true
-              );
-            }
-          }
-          break;
-
-        case WsDataType.LEAVE:
-          connection.rooms = connection.rooms.filter(
-            (r) => r !== parsedData.roomId
-          );
-
-          const userHasOtherTabsInRoom = connections.some(
-            (conn) =>
-              conn.userId === connection.userId &&
-              conn.connectionId !== connection.connectionId &&
-              conn.rooms.includes(parsedData.roomId)
-          );
-
-          if (!userHasOtherTabsInRoom) {
-            broadcastToRoom(
-              parsedData.roomId,
-              {
-                type: WsDataType.USER_LEFT,
-                userId: connection.userId,
-                userName: connection.userName,
-                connectionId: connection.connectionId,
-                roomId: parsedData.roomId,
-                id: null,
-                message: null,
-                participants: null,
-                timestamp: new Date().toISOString(),
-              },
-              [connection.connectionId],
-              true
-            );
-          }
-
-          const anyConnectionsInRoom = connections.some((conn) =>
-            conn.rooms.includes(parsedData.roomId)
-          );
-
-          if (!anyConnectionsInRoom) {
-            try {
-              await client.room.delete({
-                where: { id: parsedData.roomId },
-              });
-              delete roomShapes[parsedData.roomId];
-              console.log(`Deleted empty room ${parsedData.roomId}`);
-            } catch (err) {
-              console.error(`Failed to delete room ${parsedData.roomId}`, err);
-            }
-          }
-          break;
-
-        case WsDataType.CLOSE_ROOM: {
-          const connectionsInRoom = connections.filter((conn) =>
-            conn.rooms.includes(parsedData.roomId)
-          );
-
-          if (
-            connectionsInRoom.length === 1 &&
-            connectionsInRoom[0] &&
-            connectionsInRoom[0].connectionId === connectionId
-          ) {
-            try {
-              await client.room.delete({
-                where: { id: parsedData.roomId },
-              });
-
-              delete roomShapes[parsedData.roomId];
-
-              connectionsInRoom.forEach((conn) => {
-                if (conn.ws.readyState === WebSocket.OPEN) {
-                  conn.ws.send(
-                    JSON.stringify({
-                      type: "ROOM_CLOSED",
-                      roomId: parsedData.roomId,
-                      timestamp: new Date().toISOString(),
-                    })
-                  );
-                }
-
-                conn.rooms = conn.rooms.filter((r) => r !== parsedData.roomId);
-              });
-
-              console.log(
-                `Room ${parsedData.roomId} closed by connection ${connectionId}`
-              );
-            } catch (err) {
-              console.error("Error deleting room:", err);
-            }
-          }
-        }
-
-        case WsDataType.CURSOR_MOVE:
-          if (
-            parsedData.roomId &&
-            parsedData.userId &&
-            parsedData.connectionId &&
-            parsedData.message
-          ) {
-            broadcastToRoom(
-              parsedData.roomId,
-              {
-                type: parsedData.type,
-                roomId: parsedData.roomId,
-                userId: connection.userId,
-                userName: connection.userName,
-                connectionId: connection.connectionId,
-                message: parsedData.message,
-                timestamp: new Date().toISOString(),
-                id: null,
-                participants: null,
-              },
-              [parsedData.connectionId],
-              false
-            );
-          }
-          break;
-
-        case WsDataType.STREAM_SHAPE:
-          broadcastToRoom(
-            parsedData.roomId,
-            {
-              type: parsedData.type,
-              id: parsedData.id,
-              message: parsedData.message,
-              roomId: parsedData.roomId,
-              userId: connection.userId,
-              userName: connection.userName,
-              connectionId: connection.connectionId,
-              timestamp: new Date().toISOString(),
-              participants: null,
-            },
-            [connection.connectionId],
-            false
-          );
-          break;
-
-        case WsDataType.STREAM_UPDATE:
-          broadcastToRoom(
-            parsedData.roomId,
-            {
-              type: parsedData.type,
-              id: parsedData.id,
-              message: parsedData.message,
-              roomId: parsedData.roomId,
-              userId: connection.userId,
-              userName: connection.userName,
-              connectionId: connection.connectionId,
-              timestamp: new Date().toISOString(),
-              participants: null,
-            },
-            [connection.connectionId],
-            false
-          );
-          break;
-
-        case WsDataType.DRAW: {
-          if (!parsedData.message || !parsedData.id || !parsedData.roomId) {
-            console.error(
-              `Missing shape Id or shape message data for ${parsedData.type}`
-            );
-            return;
-          }
-
-          if (!roomShapes[parsedData.roomId]) {
-            roomShapes[parsedData.roomId] = [];
-          }
-          const shapes = (roomShapes[parsedData.roomId] ||= []);
-          const shapeIndex = shapes.findIndex((s) => s.id === parsedData.id);
-
-          if (shapeIndex !== -1) {
-            shapes[shapeIndex] = parsedData;
-          } else {
-            shapes.push(parsedData);
-          }
-
-          broadcastToRoom(
-            parsedData.roomId,
-            {
-              type: parsedData.type,
-              message: parsedData.message,
-              roomId: parsedData.roomId,
-              userId: connection.userId,
-              userName: connection.userName,
-              connectionId: connection.connectionId,
-              timestamp: new Date().toISOString(),
-              id: parsedData.id,
-              participants: null,
-            },
-            [],
-            false
-          );
-          break;
-        }
-        case WsDataType.UPDATE: {
-          if (!parsedData.message || !parsedData.id || !parsedData.roomId) {
-            console.error(
-              `Missing shape Id or shape message data for ${parsedData.type}`
-            );
-            return;
-          }
-
-          const shapes = (roomShapes[parsedData.roomId] ||= []);
-          const shapeIndex = shapes.findIndex((s) => s.id === parsedData.id);
-
-          if (shapeIndex !== -1) {
-            shapes[shapeIndex] = parsedData;
-          } else {
-            shapes.push(parsedData);
-          }
-
-          broadcastToRoom(
-            parsedData.roomId,
-            {
-              type: parsedData.type,
-              id: parsedData.id,
-              message: parsedData.message,
-              roomId: parsedData.roomId,
-              userId: connection.userId,
-              userName: connection.userName,
-              connectionId: connection.connectionId,
-              participants: null,
-              timestamp: new Date().toISOString(),
-            },
-            [],
-            false
-          );
-          break;
-        }
-        case WsDataType.ERASER:
-          if (!parsedData.id) {
-            console.error(`Missing shape Id for ${parsedData.type}`);
-            return;
-          }
-
-          const shapes = (roomShapes[parsedData.roomId] ||= []);
-          roomShapes[parsedData.roomId] = shapes.filter(
-            (s) => s.id !== parsedData.id
-          );
-
-          broadcastToRoom(
-            parsedData.roomId,
-            {
-              id: parsedData.id,
-              type: parsedData.type,
-              roomId: parsedData.roomId,
-              userId: connection.userId,
-              userName: connection.userName,
-              connectionId: connection.connectionId,
-              timestamp: new Date().toISOString(),
-              message: null,
-              participants: null,
-            },
-            [],
-            false
-          );
-          break;
-
-        default:
-          console.warn(
-            `Unknown message type received from connection ${connectionId}:`,
-            parsedData.type
-          );
-          break;
-      }
-    } catch (error) {
-      console.error("Error processing message:", error);
-    }
-  });
-
-  ws.on("close", (code, reason) => {
-    const connection = connections.find(
-      (conn) => conn.connectionId === connectionId
-    );
-    if (connection) {
-      // For each room this connection was in
-      connection.rooms.forEach((roomId) => {
-        // Check if this was the last connection from this user in the room
-        const userHasOtherConnectionsInRoom = connections.some(
-          (conn) =>
-            conn.userId === connection.userId &&
-            conn.connectionId !== connectionId &&
-            conn.rooms.includes(roomId)
-        );
-
-        // Only broadcast USER_LEFT if this was the last connection for this user
-        if (!userHasOtherConnectionsInRoom) {
-          broadcastToRoom(
-            roomId,
-            {
-              type: WsDataType.USER_LEFT,
-              userId: connection.userId,
-              userName: connection.userName,
-              connectionId: connection.connectionId,
-              roomId,
-              id: null,
-              message: null,
-              participants: null,
-              timestamp: new Date().toISOString(),
-            },
-            [connectionId],
-            true
-          );
-        }
-
-        // Check if the room is now empty
-        const roomIsEmpty = !connections.some(
-          (conn) =>
-            conn.connectionId !== connectionId && conn.rooms.includes(roomId)
-        );
-
-        // Delete empty rooms
-        if (roomIsEmpty) {
-          client.room
-            .delete({
-              where: { id: roomId },
-            })
-            .then(() => {
-              delete roomShapes[roomId];
-              console.log(
-                `Deleted empty room ${roomId} after last connection left`
-              );
-            })
-            .catch((err) => {
-              console.error(`Failed to delete empty room ${roomId}:`, err);
-            });
-        }
-      });
-    }
-
-    // Remove the connection from our connections array
-    const index = connections.findIndex(
-      (conn) => conn.connectionId === connectionId
-    );
-    if (index !== -1) {
-      connections.splice(index, 1);
-      console.log(`Connection ${connectionId} closed and removed`);
-    }
-  });
-});
-
-function broadcastToRoom(
+async function broadcast(
   roomId: string,
   message: WebSocketMessage,
   excludeConnectionIds: string[] = [],
-  includeParticipants: boolean = false
+  includeParticipants = false
 ) {
-  if (
-    (includeParticipants && !message.participants) ||
-    message.type === WsDataType.USER_JOINED
-  ) {
+  if (includeParticipants || message.type === WsDataType.USER_JOINED) {
     message.participants = getCurrentParticipants(roomId);
   }
 
-  connections.forEach((conn) => {
-    if (
-      conn.rooms.includes(roomId) &&
-      !excludeConnectionIds.includes(conn.connectionId)
-    ) {
+  const payload = JSON.stringify({ message, excludeConnectionIds });
+
+  if (redisAvailable && pub) {
+    try {
+      await pub.publish(channelFor(roomId), payload);
+      return;
+    } catch { /* fall through to in-memory */ }
+  }
+
+  // In-memory fallback
+  deliverLocally(roomId, message, excludeConnectionIds);
+}
+
+function deliverLocally(
+  roomId: string,
+  message: WebSocketMessage,
+  excludeConnectionIds: string[] = []
+) {
+  for (const conn of connections.values()) {
+    if (conn.rooms.has(roomId) && !excludeConnectionIds.includes(conn.connectionId)) {
       try {
         if (conn.ws.readyState === WebSocket.OPEN) {
           conn.ws.send(JSON.stringify(message));
         }
-      } catch (err) {
-        console.error(
-          `Error sending message to connection ${conn.connectionId}:`,
-          err
-        );
+      } catch (e) {
+        console.error(`Error sending to ${conn.connectionId}:`, e);
       }
+    }
+  }
+}
+
+// ── Redis subscription management ─────────────────────────────────────────────
+
+async function ensureSubscribed(roomId: string) {
+  if (!redisAvailable || !sub) return;
+  const ch = channelFor(roomId);
+  if (!subscribedChannels.has(ch)) {
+    try {
+      await sub.subscribe(ch);
+      subscribedChannels.add(ch);
+    } catch (e) {
+      console.error("Redis subscribe error:", e);
+    }
+  }
+}
+
+async function maybeUnsubscribe(roomId: string) {
+  if (!redisAvailable || !sub) return;
+  // Only unsubscribe if no local connections are in this room
+  const hasLocal = [...connections.values()].some(c => c.rooms.has(roomId));
+  if (!hasLocal) {
+    const ch = channelFor(roomId);
+    try {
+      await sub.unsubscribe(ch);
+      subscribedChannels.delete(ch);
+    } catch (e) {
+      console.error("Redis unsubscribe error:", e);
+    }
+  }
+}
+
+// ── WebSocket server ──────────────────────────────────────────────────────────
+
+const PORT = Number(process.env.PORT) || 8080;
+const wss = new WebSocketServer({ port: PORT });
+
+wss.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EADDRINUSE") {
+    console.log(`⚠️  Port ${PORT} already in use — WS server already running. Skipping.`);
+    process.exit(0); // exit 0 so concurrently doesn't treat it as failure
+  } else {
+    console.error("WebSocket server error:", err);
+    process.exit(1);
+  }
+});
+
+
+wss.on("connection", function connection(ws, req) {
+  const url = req.url || "";
+  const queryParams = new URLSearchParams(url.split("?")[1]);
+  const token = queryParams.get("token");
+  if (!token) { ws.close(1008, "User not authenticated"); return; }
+
+  const userId = authUser(token);
+  if (!userId) { ws.close(1008, "User not authenticated"); return; }
+
+  const connectionId = generateConnectionId();
+  const conn: Connection = { connectionId, userId, userName: userId, ws, rooms: new Set() };
+  connections.set(connectionId, conn);
+
+  ws.send(JSON.stringify({ type: WsDataType.CONNECTION_READY, connectionId }));
+  console.log(`✅ CONNECTION_READY → ${connectionId}`);
+
+  ws.on("error", (err) => console.error(`WS error ${connectionId}:`, err));
+
+  ws.on("message", async (data) => {
+    try {
+      const msg: WebSocketMessage = JSON.parse(data.toString());
+      if (!msg || !msg.roomId || !msg.userId) return;
+
+      const connection = connections.get(connectionId);
+      if (!connection) { ws.close(); return; }
+
+      // Keep username up-to-date
+      if (msg.userName && connection.userName !== msg.userName) {
+        connection.userName = msg.userName;
+      }
+
+      switch (msg.type) {
+        // ── JOIN ──────────────────────────────────────────────────────
+        case WsDataType.JOIN: {
+          const room = await client.room.findUnique({ where: { id: msg.roomId } });
+          if (!room) { ws.close(); return; }
+
+          connection.rooms.add(msg.roomId);
+          await ensureSubscribed(msg.roomId);
+
+          const participants = getCurrentParticipants(msg.roomId);
+          ws.send(JSON.stringify({
+            type: WsDataType.USER_JOINED, roomId: msg.roomId,
+            userId: connection.userId, userName: connection.userName,
+            connectionId, participants, timestamp: new Date().toISOString(),
+          }));
+
+          // Send existing shapes
+          const shapes = await getShapes(msg.roomId);
+          if (shapes.length > 0) {
+            ws.send(JSON.stringify({
+              type: WsDataType.EXISTING_SHAPES, roomId: msg.roomId,
+              message: shapes, timestamp: new Date().toISOString(),
+            }));
+          }
+
+          // Broadcast join to others (first tab only)
+          const isFirstTab = [...connections.values()]
+            .filter(c => c.userId === userId && c.connectionId !== connectionId)
+            .every(c => !c.rooms.has(msg.roomId));
+
+          if (isFirstTab) {
+            await broadcast(msg.roomId, {
+              type: WsDataType.USER_JOINED, roomId: msg.roomId,
+              userId: connection.userId, userName: connection.userName,
+              connectionId, participants, timestamp: new Date().toISOString(),
+              id: null, message: null,
+            }, [connectionId], true);
+          }
+          break;
+        }
+
+        // ── LEAVE ─────────────────────────────────────────────────────
+        case WsDataType.LEAVE: {
+          connection.rooms.delete(msg.roomId);
+          const hasOtherTabs = [...connections.values()]
+            .some(c => c.userId === userId && c.connectionId !== connectionId && c.rooms.has(msg.roomId));
+
+          if (!hasOtherTabs) {
+            await broadcast(msg.roomId, {
+              type: WsDataType.USER_LEFT, userId: connection.userId,
+              userName: connection.userName, connectionId: connection.connectionId,
+              roomId: msg.roomId, id: null, message: null, participants: null,
+              timestamp: new Date().toISOString(),
+            }, [connectionId], true);
+          }
+          await maybeUnsubscribe(msg.roomId);
+          await maybeDeleteRoom(msg.roomId);
+          break;
+        }
+
+        // ── CLOSE_ROOM ────────────────────────────────────────────────
+        case WsDataType.CLOSE_ROOM: {
+          const inRoom = [...connections.values()].filter(c => c.rooms.has(msg.roomId));
+          if (inRoom.length === 1 && inRoom[0]?.connectionId === connectionId) {
+            await deleteRoom(msg.roomId, inRoom);
+          }
+          break;
+        }
+
+        // ── CURSOR_MOVE ───────────────────────────────────────────────
+        case WsDataType.CURSOR_MOVE:
+          if (msg.connectionId && msg.message) {
+            await broadcast(msg.roomId, {
+              type: msg.type, roomId: msg.roomId,
+              userId: connection.userId, userName: connection.userName,
+              connectionId: connection.connectionId,
+              message: msg.message, timestamp: new Date().toISOString(),
+              id: null, participants: null,
+            }, [msg.connectionId], false);
+          }
+          break;
+
+        // ── STREAM_SHAPE / STREAM_UPDATE ──────────────────────────────
+        case WsDataType.STREAM_SHAPE:
+        case WsDataType.STREAM_UPDATE:
+          await broadcast(msg.roomId, {
+            type: msg.type, id: msg.id, message: msg.message,
+            roomId: msg.roomId, userId: connection.userId,
+            userName: connection.userName, connectionId: connection.connectionId,
+            timestamp: new Date().toISOString(), participants: null,
+          }, [connection.connectionId], false);
+          break;
+
+        // ── DRAW ──────────────────────────────────────────────────────
+        case WsDataType.DRAW: {
+          if (!msg.message || !msg.id) return;
+          await upsertShape(msg.roomId, msg);
+          await broadcast(msg.roomId, {
+            type: msg.type, message: msg.message, id: msg.id,
+            roomId: msg.roomId, userId: connection.userId,
+            userName: connection.userName, connectionId: connection.connectionId,
+            timestamp: new Date().toISOString(), participants: null,
+          }, [], false);
+          break;
+        }
+
+        // ── UPDATE ────────────────────────────────────────────────────
+        case WsDataType.UPDATE: {
+          if (!msg.message || !msg.id) return;
+          await upsertShape(msg.roomId, msg);
+          await broadcast(msg.roomId, {
+            type: msg.type, id: msg.id, message: msg.message,
+            roomId: msg.roomId, userId: connection.userId,
+            userName: connection.userName, connectionId: connection.connectionId,
+            participants: null, timestamp: new Date().toISOString(),
+          }, [], false);
+          break;
+        }
+
+        // ── ERASER ────────────────────────────────────────────────────
+        case WsDataType.ERASER: {
+          if (!msg.id) return;
+          await deleteShape(msg.roomId, msg.id);
+          await broadcast(msg.roomId, {
+            id: msg.id, type: msg.type, roomId: msg.roomId,
+            userId: connection.userId, userName: connection.userName,
+            connectionId: connection.connectionId,
+            timestamp: new Date().toISOString(), message: null, participants: null,
+          }, [], false);
+          break;
+        }
+
+        default:
+          console.warn(`Unknown type ${msg.type} from ${connectionId}`);
+      }
+    } catch (error) {
+      console.error("Message processing error:", error);
+    }
+  });
+
+  ws.on("close", async () => {
+    const connection = connections.get(connectionId);
+    if (connection) {
+      for (const roomId of connection.rooms) {
+        const hasOther = [...connections.values()]
+          .some(c => c.userId === userId && c.connectionId !== connectionId && c.rooms.has(roomId));
+
+        if (!hasOther) {
+          await broadcast(roomId, {
+            type: WsDataType.USER_LEFT, userId: connection.userId,
+            userName: connection.userName, connectionId: connection.connectionId,
+            roomId, id: null, message: null, participants: null,
+            timestamp: new Date().toISOString(),
+          }, [connectionId], true);
+        }
+        await maybeUnsubscribe(roomId);
+        await maybeDeleteRoom(roomId);
+      }
+    }
+    connections.delete(connectionId);
+    console.log(`Connection ${connectionId} removed`);
+  });
+});
+
+// ── Room cleanup helpers ───────────────────────────────────────────────────────
+
+async function maybeDeleteRoom(roomId: string) {
+  const anyConn = [...connections.values()].some(c => c.rooms.has(roomId));
+  if (!anyConn) {
+    try {
+      await client.room.delete({ where: { id: roomId } });
+      await clearRoomShapes(roomId);
+      console.log(`Deleted empty room ${roomId}`);
+    } catch { /* might already be deleted */ }
+  }
+}
+
+async function deleteRoom(roomId: string, inRoom: Connection[]) {
+  try {
+    await client.room.delete({ where: { id: roomId } });
+    await clearRoomShapes(roomId);
+    for (const conn of inRoom) {
+      if (conn.ws.readyState === WebSocket.OPEN) {
+        conn.ws.send(JSON.stringify({ type: "ROOM_CLOSED", roomId, timestamp: new Date().toISOString() }));
+      }
+      conn.rooms.delete(roomId);
+    }
+    console.log(`Room ${roomId} closed`);
+  } catch (e) {
+    console.error("Error deleting room:", e);
+  }
+}
+
+// ── Wire up Redis subscriber message handler ──────────────────────────────────
+
+function wireRedisSubscriber() {
+  if (!sub) return;
+  sub.on("message", (channel, rawPayload) => {
+    try {
+      const { message, excludeConnectionIds } = JSON.parse(rawPayload) as {
+        message: WebSocketMessage;
+        excludeConnectionIds: string[];
+      };
+      const roomId = channel.replace("room:", "");
+      deliverLocally(roomId, message, excludeConnectionIds);
+    } catch (e) {
+      console.error("Redis subscriber parse error:", e);
     }
   });
 }
 
-function getCurrentParticipants(roomId: string) {
-  const map = new Map();
-  connections
-    .filter((conn) => conn.rooms.includes(roomId))
-    .forEach((conn) =>
-      map.set(conn.userId, { userId: conn.userId, userName: conn.userName })
-    );
-  return Array.from(map.values());
-}
+// ── Boot ──────────────────────────────────────────────────────────────────────
 
-wss.on("listening", () => {
+wss.on("listening", async () => {
   console.log(`WebSocket server started on port ${process.env.PORT || 8080}`);
+  await initRedis();
+  wireRedisSubscriber();
+  if (redisAvailable) {
+    console.log("🔴 Redis Pub/Sub enabled — horizontal scaling ready");
+  } else {
+    console.log("⚠️  Running without Redis — single-node in-memory mode");
+  }
 });

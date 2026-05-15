@@ -1,4 +1,4 @@
-import React from "react";
+﻿import React from "react";
 import type { Metadata } from "next";
 import { baseMetadata } from "@/utils/metadata";
 import Script from "next/script";
@@ -160,7 +160,7 @@ export default function AboutPage() {
 
                     <h3 className="mt-3 mb-1 lg:mt-8 lg:mb-2">📂 Github Repo</h3>
                     <p>
-                        <a href="https://github.com/coderomm/CollabyDraw" target="_blank" rel="noopener noreferrer">
+                        <a href="https://github.com/YashGarg81/collabydraw" target="_blank" rel="noopener noreferrer">
                             github.com/coderomm/CollabyDraw
                         </a>
                     </p>
@@ -184,3 +184,4 @@ export default function AboutPage() {
         </>
     );
 }
+

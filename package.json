@@ -3,7 +3,9 @@
   "private": true,
   "scripts": {
     "build": "turbo build",
-    "dev": "turbo dev",
+    "dev": "concurrently --names \"web,ws\" --prefix-colors \"cyan,magenta\" \"pnpm --filter collabydraw run dev\" \"pnpm --filter ws run dev\"",
+    "dev:web": "pnpm --filter collabydraw run dev",
+    "dev:ws": "pnpm --filter ws run dev",
     "lint": "turbo lint",
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
     "db:generate": "cd packages/db && prisma generate && cd ../..",
@@ -11,6 +13,7 @@
     "start:ws": "cd apps/ws && pnpm run start"
   },
   "devDependencies": {
+    "concurrently": "^9.2.1",
     "prettier": "^3.5.0",
     "turbo": "^2.4.1",
     "typescript": "5.7.3"
