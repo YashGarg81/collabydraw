@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/utils/auth";
 import client from "@repo/db/client";
-import { getTemplate } from "@/data/templates";
 import { getPlanLimits } from "@/config/planLimits";
 
 // GET /api/templates/[id] — get full template with shapes
@@ -11,7 +10,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const template = getTemplate(id);
+  const template = await client.template.findUnique({ where: { id } });
   if (!template) {
     return NextResponse.json({ error: "Template not found" }, { status: 404 });
   }
@@ -29,7 +28,7 @@ export async function POST(
   }
 
   const { id } = await params;
-  const template = getTemplate(id);
+  const template = await client.template.findUnique({ where: { id } });
   if (!template) {
     return NextResponse.json({ error: "Template not found" }, { status: 404 });
   }
@@ -60,7 +59,7 @@ export async function POST(
       name: template.name,
       description: template.description,
       ownerId: session.user.id,
-      shapes: JSON.stringify(template.shapes),
+      shapes: template.shapes,
     },
   });
 
