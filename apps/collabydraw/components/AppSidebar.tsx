@@ -18,7 +18,6 @@ import {
     Upload,
     Linkedin,
     Share2,
-    Star,
 } from "lucide-react"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
@@ -48,7 +47,6 @@ interface SidebarProps {
 }
 
 export function AppSidebar({ isOpen, onClose, canvasColor, setCanvasColor, isMobile, roomName, isStandalone, onClearCanvas, onExportCanvas, onImportCanvas }: SidebarProps) {
-    const [stars, setStars] = useState<number | null>(null);
     const [clearDialogOpen, setClearDialogOpen] = useState(false);
     const { theme, setTheme } = useTheme();
     const { data: session } = useSession();
@@ -83,18 +81,6 @@ export function AppSidebar({ isOpen, onClose, canvasColor, setCanvasColor, isMob
         return () => document.body.classList.remove("overflow-hidden")
     }, [isOpen])
 
-    useEffect(() => {
-        const fetchRepoMetaData = async () => {
-            try {
-                const res = await fetch('https://api.github.com/repos/coderomm/CollabyDraw');
-                const data = await res.json();
-                setStars(data.stargazers_count);
-            } catch (error) {
-                console.error('Error fetching GitHub repo data:', error);
-            }
-        }
-        fetchRepoMetaData();
-    }, [])
 
     return (
         <>
@@ -156,7 +142,7 @@ export function AppSidebar({ isOpen, onClose, canvasColor, setCanvasColor, isMob
                                 rel="noopener noreferrer"
                                 title="GitHub"
                             >
-                                <Github className="h-4 w-4" />GitHub - <span className="flex items-center justify-start gap-1">{stars}<Star className="h-4 w-4" /></span>
+                                <Github className="h-4 w-4" /> GitHub
                             </Link>
                             <SidebarLinkItem icon={Linkedin} label="Linkedin" url="https://www.linkedin.com/in/yash-garg-78a448312" />
                         </nav>
