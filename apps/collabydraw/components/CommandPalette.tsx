@@ -120,6 +120,7 @@ export function CommandPalette({ open, onClose, commands }: CommandPaletteProps)
                   value={query}
                   onChange={(e) => { setQuery(e.target.value); setSelected(0); }}
                   className="flex-1 bg-transparent text-white text-sm placeholder:text-white/30 focus:outline-none"
+                  suppressHydrationWarning
                 />
                 <kbd className="text-[10px] text-white/25 border border-white/10 rounded px-1.5 py-0.5 font-mono">
                   ESC

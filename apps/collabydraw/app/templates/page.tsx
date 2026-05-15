@@ -188,6 +188,7 @@ export default function TemplatesPage() {
               value={search}
               onChange={e => setSearch(e.target.value)}
               className="w-full pl-8 pr-4 py-1.5 text-sm bg-white/5 border border-white/8 rounded-lg text-white placeholder:text-white/25 focus:outline-none focus:border-violet-500/40 transition"
+              suppressHydrationWarning
             />
           </div>
         </div>

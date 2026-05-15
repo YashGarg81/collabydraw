@@ -4,6 +4,8 @@ import { authOptions } from "@/utils/auth";
 import client from "@repo/db/client";
 import { getPlanLimits } from "@/config/planLimits";
 
+// Plan limit check logic below
+
 // GET /api/boards?sort=newest|oldest|name — list all boards owned by the current user
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -26,6 +28,7 @@ export async function GET(req: NextRequest) {
       description: true,
       thumbnail: true,
       isPublic: true,
+      publicRole: true,
       isPinned: true,
       createdAt: true,
       updatedAt: true,
@@ -43,10 +46,10 @@ export async function GET(req: NextRequest) {
 
   const user = await client.user.findUnique({
     where: { id: session.user.id },
-    select: { plan: true, aiCredits: true },
+    select: { plan: true, aiCredits: true, trialEndsAt: true },
   });
 
-  const limits = getPlanLimits(user?.plan ?? "FREE");
+  const limits = getPlanLimits(user?.plan ?? "FREE", user?.trialEndsAt);
   const boardCount = boards.length;
   const boardLimit = limits.boards === Infinity ? null : limits.boards;
   const atLimit = boardLimit !== null && boardCount >= boardLimit;
@@ -67,9 +70,9 @@ export async function POST(req: NextRequest) {
 
   const user = await client.user.findUnique({
     where: { id: session.user.id },
-    select: { plan: true },
+    select: { plan: true, trialEndsAt: true },
   });
-  const limits = getPlanLimits(user?.plan ?? "FREE");
+  const limits = getPlanLimits(user?.plan ?? "FREE", user?.trialEndsAt);
 
   if (limits.boards !== Infinity) {
     const count = await client.board.count({ where: { ownerId: session.user.id } });

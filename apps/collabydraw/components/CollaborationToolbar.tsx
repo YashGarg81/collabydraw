@@ -16,7 +16,7 @@ import { getRoomSharingUrl, isInRoom } from "@/utils/roomParams";
 import { BASE_URL } from "@/config/constants";
 import { getClientColor } from "@/utils/getClientColor";
 
-export default function CollaborationToolbar({ participants, hash }: { participants?: RoomParticipants[], hash?: string }) {
+export default function CollaborationToolbar({ participants, hash, onFollowUser, followingUserId }: { participants?: RoomParticipants[], hash?: string, onFollowUser?: (userId: string) => void, followingUserId?: string | null }) {
     const pathname = usePathname();
     const [isOpen, setIsOpen] = useState(false);
     const { data: session } = useSession();
@@ -48,7 +48,7 @@ export default function CollaborationToolbar({ participants, hash }: { participa
                             {displayParticipants?.map((participant) => (
                                 <Tooltip key={participant.userId}>
                                     <TooltipTrigger asChild>
-                                        <div style={{ backgroundColor: getClientColor(participant) }} className={`w-7 h-7 rounded-full flex items-center justify-center cursor-pointer`}>
+                                        <div onClick={() => onFollowUser?.(participant.userId)} style={{ backgroundColor: getClientColor(participant) }} className={`w-7 h-7 rounded-full flex items-center justify-center cursor-pointer border-2 transition-all ${followingUserId === participant.userId ? 'border-brand-color scale-110' : 'border-transparent'}`}>
                                             <span className="text-sm font-bold text-gray-900 dark:text-gray-900">
                                                 {participant.userName.charAt(0).toUpperCase()}
                                             </span>
@@ -80,7 +80,7 @@ export default function CollaborationToolbar({ participants, hash }: { participa
                                                     key={participant.userId}
                                                     className="cursor-pointer select-none flex items-center space-x-2 h-8 w-full justify-start gap-2 rounded-md px-3 text-sm font-medium transition-colors text-color-on-surface hover:text-color-on-surface bg-transparent hover:bg-button-hover-bg focus-visible:shadow-brand-color-shadow focus-visible:outline-none focus-visible:ring-0 active:bg-button-hover-bg active:border active:border-brand-active dark:hover:bg-w-button-hover-bg"
                                                 >
-                                                    <div style={{ backgroundColor: getClientColor(participant) }} className={`w-7 h-7 rounded-full flex items-center justify-center cursor-pointer`}>
+                                                    <div onClick={() => onFollowUser?.(participant.userId)} style={{ backgroundColor: getClientColor(participant) }} className={`w-7 h-7 rounded-full flex items-center justify-center cursor-pointer border-2 transition-all ${followingUserId === participant.userId ? 'border-brand-color scale-110' : 'border-transparent'}`}>
                                                         <span className="text-sm font-bold text-gray-900 dark:text-gray-900">
                                                             {participant.userName.charAt(0).toUpperCase()}
                                                         </span>

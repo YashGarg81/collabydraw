@@ -376,6 +376,21 @@ wss.on("connection", function connection(ws, req) {
           break;
         }
 
+        // ── YJS UPDATE ────────────────────────────────────────────────
+        case WsDataType.YJS_UPDATE: {
+          if (!msg.message) return;
+          // We just broadcast Yjs updates to all peers.
+          // State persistence would ideally store these updates, but for now
+          // we rely on existingShapes or peer-to-peer sync.
+          await broadcast(msg.roomId, {
+            type: msg.type, message: msg.message, id: msg.id,
+            roomId: msg.roomId, userId: connection.userId,
+            userName: connection.userName, connectionId: connection.connectionId,
+            participants: null, timestamp: new Date().toISOString(),
+          }, [connection.connectionId], false);
+          break;
+        }
+
         // ── ERASER ────────────────────────────────────────────────────
         case WsDataType.ERASER: {
           if (!msg.id) return;

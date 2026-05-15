@@ -32,6 +32,8 @@ export class SelectionController {
 
   private ctx: CanvasRenderingContext2D;
   public isSnapToGrid: boolean = false;
+  public isSmartSnapping: boolean = true; // Smart object-to-object snapping
+  public activeSnapLines: { x?: number; y?: number }[] = [];
 
   private getSnappedPoint(val: number): number {
     return this.isSnapToGrid ? Math.round(val / 20) * 20 : val;
@@ -375,9 +377,74 @@ export class SelectionController {
     if (this.isDragging && this.selectedShapes.length > 0) {
       const bounds = this.getCombinedBounds()!;
       
-      const targetX = this.getSnappedPoint(x - this.dragOffset.x);
-      const targetY = this.getSnappedPoint(y - this.dragOffset.y);
+      let targetX = this.getSnappedPoint(x - this.dragOffset.x);
+      let targetY = this.getSnappedPoint(y - this.dragOffset.y);
       
+      this.activeSnapLines = [];
+
+      // Smart object-to-object snapping
+      if (this.isSmartSnapping && existingShapes && !this.isSnapToGrid) {
+          const threshold = 5;
+          let minSnapDx = threshold + 1;
+          let minSnapDy = threshold + 1;
+          let snappedXLine: number | undefined;
+          let snappedYLine: number | undefined;
+          
+          const draggedCenter = { x: targetX + bounds.width / 2, y: targetY + bounds.height / 2 };
+          const draggedRight = targetX + bounds.width;
+          const draggedBottom = targetY + bounds.height;
+
+          const nonSelectedShapes = existingShapes.filter(s => !this.selectedShapes.find(sel => sel.id === s.id));
+
+          for (const shape of nonSelectedShapes) {
+              const sBounds = this.getShapeBounds(shape);
+              if (sBounds.width === 0 && sBounds.height === 0) continue;
+
+              const sCenter = { x: sBounds.x + sBounds.width / 2, y: sBounds.y + sBounds.height / 2 };
+              const sRight = sBounds.x + sBounds.width;
+              const sBottom = sBounds.y + sBounds.height;
+
+              // Check X-axis snapping
+              const xPoints = [
+                  { t: targetX, s: sBounds.x, line: sBounds.x, offset: 0 },
+                  { t: targetX, s: sRight, line: sRight, offset: 0 },
+                  { t: draggedRight, s: sBounds.x, line: sBounds.x, offset: -bounds.width },
+                  { t: draggedRight, s: sRight, line: sRight, offset: -bounds.width },
+                  { t: draggedCenter.x, s: sCenter.x, line: sCenter.x, offset: -bounds.width / 2 }
+              ];
+
+              for (const pt of xPoints) {
+                  const dist = Math.abs(pt.t - pt.s);
+                  if (dist < threshold && dist < minSnapDx) {
+                      minSnapDx = dist;
+                      targetX = pt.s + pt.offset;
+                      snappedXLine = pt.line;
+                  }
+              }
+
+              // Check Y-axis snapping
+              const yPoints = [
+                  { t: targetY, s: sBounds.y, line: sBounds.y, offset: 0 },
+                  { t: targetY, s: sBottom, line: sBottom, offset: 0 },
+                  { t: draggedBottom, s: sBounds.y, line: sBounds.y, offset: -bounds.height },
+                  { t: draggedBottom, s: sBottom, line: sBottom, offset: -bounds.height },
+                  { t: draggedCenter.y, s: sCenter.y, line: sCenter.y, offset: -bounds.height / 2 }
+              ];
+
+              for (const pt of yPoints) {
+                  const dist = Math.abs(pt.t - pt.s);
+                  if (dist < threshold && dist < minSnapDy) {
+                      minSnapDy = dist;
+                      targetY = pt.s + pt.offset;
+                      snappedYLine = pt.line;
+                  }
+              }
+          }
+          
+          if (snappedXLine !== undefined) this.activeSnapLines.push({ x: snappedXLine });
+          if (snappedYLine !== undefined) this.activeSnapLines.push({ y: snappedYLine });
+      }
+
       const dx = targetX - bounds.x;
       const dy = targetY - bounds.y;
 
@@ -584,6 +651,7 @@ export class SelectionController {
     this.isDragging = false;
     this.resetCursor();
     this.originalShapeStates.clear();
+    this.activeSnapLines = [];
   }
 
   stopResizing() {

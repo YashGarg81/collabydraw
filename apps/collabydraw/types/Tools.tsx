@@ -13,7 +13,8 @@ import {
     Wand2,
     LassoSelect,
     Frame,
-    PanelTop
+    PanelTop,
+    MessageCircle
 } from "lucide-react"
 import { Tool } from "./canvas";
 import { TextIcon } from "@/components/SvgIcons";
@@ -114,5 +115,11 @@ export const tools: Tool[] = [
         icon: <PanelTop />,
         shortcut: "w",
         label: 'Web Embed'
+    },
+    {
+        type: "comment",
+        icon: <MessageCircle />,
+        shortcut: "c",
+        label: 'Comment'
     }
 ]

@@ -30,8 +30,13 @@ export const PLAN_LIMITS = {
 
 export type Plan = keyof typeof PLAN_LIMITS;
 
-export function getPlanLimits(plan: string) {
-  const p = (plan?.toUpperCase() ?? "FREE") as Plan;
+export function getPlanLimits(plan: string, trialEndsAt?: Date | null) {
+  let p = (plan?.toUpperCase() ?? "FREE") as Plan;
+  
+  if (p === "FREE" && trialEndsAt && new Date() < new Date(trialEndsAt)) {
+    p = "PRO";
+  }
+  
   return PLAN_LIMITS[p] ?? PLAN_LIMITS.FREE;
 }
 

@@ -37,9 +37,9 @@ export async function POST(
   // Plan enforcement — same limit as creating a blank board
   const user = await client.user.findUnique({
     where: { id: session.user.id },
-    select: { plan: true },
+    select: { plan: true, trialEndsAt: true },
   });
-  const limits = getPlanLimits(user?.plan ?? "FREE");
+  const limits = getPlanLimits(user?.plan ?? "FREE", user?.trialEndsAt);
   if (limits.boards !== Infinity) {
     const count = await client.board.count({ where: { ownerId: session.user.id } });
     if (count >= limits.boards) {

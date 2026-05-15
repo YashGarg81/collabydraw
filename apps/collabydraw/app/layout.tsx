@@ -7,6 +7,8 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { baseMetadata, jsonLdSchemas } from "@/utils/metadata";
 import Script from "next/script";
 import { Analytics } from "@vercel/analytics/react"
+import { ReferralTracker } from "@/components/ReferralTracker";
+import { Suspense } from "react";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -80,6 +82,9 @@ export default function RootLayout({
       >
         <Provider>
           <ThemeProvider>
+            <Suspense fallback={null}>
+              <ReferralTracker />
+            </Suspense>
             {children}
           </ThemeProvider>
           <Toaster />

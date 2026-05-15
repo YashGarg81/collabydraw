@@ -15,6 +15,7 @@ import {
 } from "@/types/canvas";
 import { SelectionController } from "./SelectionController";
 import { v4 as uuidv4 } from "uuid";
+import * as Y from "yjs";
 import {
   RoomParticipants,
   WebSocketMessage,
@@ -97,15 +98,45 @@ export class CanvasEngine {
   private fontStyle: FontStyle = "normal";
 
   private existingShapes: Shape[];
+  private isDraggingCanvas: boolean = false;
+  private lastMouseX: number = 0;
+  private lastMouseY: number = 0;
   private isMarqueeSelecting: boolean = false;
   private marqueeStartX: number = 0;
   private marqueeStartY: number = 0;
   private marqueeCurrentX: number = 0;
   private marqueeCurrentY: number = 0;
-  private undoStack: Shape[][] = [];
-  private redoStack: Shape[][] = [];
+  
+  // Yjs CRDT State
+  public yDoc = new Y.Doc();
+  public yShapes = this.yDoc.getMap<Shape>("shapes");
+  public yOrder = this.yDoc.getArray<string>("shapeOrder");
+  public yUndoManager = new Y.UndoManager([this.yShapes, this.yOrder]);
+
   private SelectionController: SelectionController;
   public isSnapToGrid: boolean = false;
+  
+  public followUserId: string | null = null;
+  public isReadOnly: boolean = false;
+  
+  public follow(userId: string | null) {
+      this.followUserId = userId;
+      if (userId === null) return;
+      
+      // Look for a known cursor immediately
+      let foundCursor = false;
+      this.remoteCursors.forEach((c) => {
+          if (c.userId === userId) {
+              this.panX = c.x - (this.canvas.width / 2) / this.scale;
+              this.panY = c.y - (this.canvas.height / 2) / this.scale;
+              foundCursor = true;
+          }
+      });
+      if (foundCursor) {
+          this.triggerViewChange();
+          this.clearCanvas();
+      }
+  }
 
   public setSnapToGrid(snap: boolean) {
     this.isSnapToGrid = snap;
@@ -311,6 +342,12 @@ export class CanvasEngine {
                 userId: data.userId,
                 userName: data.userName ?? data.userId,
               });
+
+              if (this.followUserId === data.userId) {
+                this.panX = coords.x - (this.canvas.width / 2) / this.scale;
+                this.panY = coords.y - (this.canvas.height / 2) / this.scale;
+                this.triggerViewChange();
+              }
               
               if (coords.isLaser) {
                   const strokeFill = coords.strokeFill || "#ff0000";
@@ -1063,6 +1100,33 @@ export class CanvasEngine {
     this.SelectionController.drawSelectionBox();
 }
 
+if (this.SelectionController.activeSnapLines && this.SelectionController.activeSnapLines.length > 0) {
+    this.ctx.save();
+    this.ctx.strokeStyle = "#e83e8c"; // Magenta color for snap lines
+    this.ctx.lineWidth = 1 / this.scale;
+    this.ctx.setLineDash([5 / this.scale, 5 / this.scale]);
+    
+    // Draw lines across the entire visible canvas
+    const visibleStartX = -this.panX / this.scale;
+    const visibleStartY = -this.panY / this.scale;
+    const visibleWidth = this.canvas.width / this.scale;
+    const visibleHeight = this.canvas.height / this.scale;
+
+    this.ctx.beginPath();
+    this.SelectionController.activeSnapLines.forEach(line => {
+        if (line.x !== undefined) {
+            this.ctx.moveTo(line.x, visibleStartY);
+            this.ctx.lineTo(line.x, visibleStartY + visibleHeight);
+        }
+        if (line.y !== undefined) {
+            this.ctx.moveTo(visibleStartX, line.y);
+            this.ctx.lineTo(visibleStartX + visibleWidth, line.y);
+        }
+    });
+    this.ctx.stroke();
+    this.ctx.restore();
+}
+
 if (this.activeTool === "selection" && this.isMarqueeSelecting) {
     this.ctx.save();
     this.ctx.fillStyle = "rgba(105, 101, 219, 0.08)";
@@ -1304,6 +1368,14 @@ this.triggerViewChange();
   }
 
 mouseDownHandler = (e: MouseEvent) => {
+  if (this.isReadOnly) {
+      this.activeTool = "grab";
+      this.isDraggingCanvas = true;
+      this.lastMouseX = e.clientX;
+      this.lastMouseY = e.clientY;
+      return;
+  }
+
   const { x, y } = this.transformPanScale(e.clientX, e.clientY);
   if (this.activeTool === "selection") {
     if (this.SelectionController.hasSelection()) {
@@ -1389,6 +1461,19 @@ mouseDownHandler = (e: MouseEvent) => {
   } else if (this.activeTool === "image") {
     this.clicked = false;
     this.handleImageUpload(x, y);
+  } else if (this.activeTool === "comment") {
+    this.clicked = false;
+    this.updateShapes([{
+        id: uuidv4(),
+        type: "comment",
+        x,
+        y,
+        text: "",
+        userId: this.userId || "guest",
+        userName: this.userName || "Guest",
+        replies: []
+    }]);
+    this.activeTool = "selection";
   } else if (this.activeTool === "eraser") {
     this.eraser(x, y);
   } else if (this.activeTool === "laser") {
@@ -3235,33 +3320,63 @@ handleResize(width: number, height: number) {
 }
 
   public updateShape(updatedShape: Shape): void {
-  const index = this.existingShapes.findIndex(
-    (shape) => shape.id === updatedShape.id
-  );
-  if(index !== -1) {
-  this.existingShapes[index] = updatedShape;
-  this.clearCanvas();
-}
+    const index = this.existingShapes.findIndex(
+      (shape) => shape.id === updatedShape.id
+    );
+    if (index !== -1) {
+      this.existingShapes[index] = updatedShape;
+      this.clearCanvas();
+
+      // Broadcast update
+      if (!this.isStandalone && this.isConnected && this.roomId) {
+        try {
+          this.sendMessage(JSON.stringify({
+            type: WsDataType.UPDATE,
+            id: updatedShape.id,
+            message: updatedShape,
+            roomId: this.roomId,
+          }));
+        } catch (e) {
+          console.error("Error broadcasting shape update:", e);
+        }
+      }
+    }
   }
 
   public updateShapes(shapes: Shape[]): void {
-  shapes.forEach((shape) => {
-    const index = this.existingShapes.findIndex((s) => s.id === shape.id);
-    if (index === -1) {
-      this.existingShapes.push(shape);
-    } else {
-      this.existingShapes[index] = shape;
-      const selectedShapes = this.SelectionController.getSelectedShapes();
-      const selIndex = selectedShapes.findIndex(s => s.id === shape.id);
-      if (selIndex !== -1) {
-          const newSelection = [...selectedShapes];
-          newSelection[selIndex] = shape;
-          this.SelectionController.setSelectedShapes(newSelection);
+    shapes.forEach((shape) => {
+      const index = this.existingShapes.findIndex((s) => s.id === shape.id);
+      const isNew = index === -1;
+      
+      if (isNew) {
+        this.existingShapes.push(shape);
+      } else {
+        this.existingShapes[index] = shape;
+        const selectedShapes = this.SelectionController.getSelectedShapes();
+        const selIndex = selectedShapes.findIndex(s => s.id === shape.id);
+        if (selIndex !== -1) {
+            const newSelection = [...selectedShapes];
+            newSelection[selIndex] = shape;
+            this.SelectionController.setSelectedShapes(newSelection);
+        }
       }
-    }
-  });
-  this.clearCanvas();
-}
+
+      // Broadcast
+      if (!this.isStandalone && this.isConnected && this.roomId) {
+        try {
+          this.sendMessage(JSON.stringify({
+            type: isNew ? WsDataType.DRAW : WsDataType.UPDATE,
+            id: shape.id,
+            message: shape,
+            roomId: this.roomId,
+          }));
+        } catch (e) {
+          console.error(`Error broadcasting shape ${isNew ? 'draw' : 'update'}:`, e);
+        }
+      }
+    });
+    this.clearCanvas();
+  }
 
   public removeShape(id: string): void {
   this.existingShapes = this.existingShapes.filter(
@@ -3279,7 +3394,25 @@ handleResize(width: number, height: number) {
   this.clearCanvas();
 }
 
+  /** Returns current pan/scale for Rulers component */
+  public getViewport(): { panX: number; panY: number; scale: number } {
+    return { panX: this.panX, panY: this.panY, scale: this.scale };
+  }
+
+  /** Reorder shapes array (for Layers panel drag-reorder) */
+  public reorderShapes(ordered: string[]): void {
+    const map = new Map(this.existingShapes.map(s => [s.id, s]));
+    const reordered = ordered.map(id => map.get(id)).filter(Boolean) as typeof this.existingShapes;
+    // Keep any shapes not in ordered list at the end
+    const extras = this.existingShapes.filter(s => s.id != null && !(ordered as (string | null)[]).includes(s.id));
+    this.existingShapes = [...reordered, ...extras];
+    this.clearCanvas();
+  }
+
+
   private handleKeyDown = (e: KeyboardEvent) => {
+  if (this.isReadOnly) return;
+  
   if (e.key === "z" && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
     e.preventDefault();
     this.undo();
@@ -3623,41 +3756,31 @@ public ungroupSelected() {
     this.syncAllShapes();
 }
 
-  private saveState() {
-  this.undoStack.push(JSON.parse(JSON.stringify(this.existingShapes)));
-  this.redoStack = [];
-  if (this.undoStack.length > 50) {
-    this.undoStack.shift();
+  private saveUndoState() {
+    // Replaced by Yjs UndoManager
   }
-}
+
+  private saveState() {
+    // Stubbed for backward compatibility
+  }
+
+  private rebuildFromYjs() {
+    // Stubbed for backward compatibility
+  }
 
   public undo() {
-  if (this.undoStack.length === 0) return;
-  this.redoStack.push(JSON.parse(JSON.stringify(this.existingShapes)));
-  this.existingShapes = this.undoStack.pop()!;
-  this.SelectionController.setSelectedShapes([]);
-  this.notifyShapeCountChange();
-  this.clearCanvas();
-  this.syncAllShapes();
-}
+    this.yUndoManager.undo();
+    this.rebuildFromYjs();
+  }
 
   public redo() {
-  if (this.redoStack.length === 0) return;
-  this.undoStack.push(JSON.parse(JSON.stringify(this.existingShapes)));
-  this.existingShapes = this.redoStack.pop()!;
-  this.SelectionController.setSelectedShapes([]);
-  this.notifyShapeCountChange();
-  this.clearCanvas();
-  this.syncAllShapes();
-}
+    this.yUndoManager.redo();
+    this.rebuildFromYjs();
+  }
 
-  // Wave 8: Bulk-add shapes (AI / Mermaid). The entire batch is a single undo step.
+  // Wave 8: Bulk-add shapes (AI / Mermaid).
   public addShapes(shapes: Shape[]) {
     if (!shapes || shapes.length === 0) return;
-    // Save current state as one undo snapshot
-    this.undoStack.push(JSON.parse(JSON.stringify(this.existingShapes)));
-    if (this.undoStack.length > 50) this.undoStack.shift();
-    this.redoStack = [];
 
     this.existingShapes = [...this.existingShapes, ...shapes];
     this.notifyShapeCountChange();
@@ -3670,9 +3793,6 @@ public ungroupSelected() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   public applyLayout(updatedShapes: any[]) {
     if (!updatedShapes || updatedShapes.length === 0) return;
-    this.undoStack.push(JSON.parse(JSON.stringify(this.existingShapes)));
-    if (this.undoStack.length > 50) this.undoStack.shift();
-    this.redoStack = [];
 
     // Build a lookup from id → updated position
     const posMap = new Map<string, { x?: number; y?: number }>();

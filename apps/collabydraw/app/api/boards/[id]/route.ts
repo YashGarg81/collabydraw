@@ -21,12 +21,18 @@ export async function GET(_req: NextRequest, { params }: Params) {
   if (!board) return NextResponse.json({ error: "Board not found" }, { status: 404 });
 
   const isOwner = board.ownerId === session.user.id;
-  const isMember = board.members.some((m) => m.userId === session.user.id);
+  const member = board.members.find((m) => m.userId === session.user.id);
+  const isMember = !!member;
   if (!isOwner && !isMember && !board.isPublic) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  return NextResponse.json({ board });
+  let role = "VIEWER";
+  if (isOwner) role = "OWNER";
+  else if (member) role = member.role;
+  else if (board.isPublic) role = board.publicRole;
+
+  return NextResponse.json({ board, role });
 }
 
 // PATCH /api/boards/:id — update name, description, thumbnail, shapes
@@ -49,8 +55,11 @@ export async function PATCH(req: NextRequest, { params }: Params) {
       ...(body.name        !== undefined && { name:        body.name }),
       ...(body.description !== undefined && { description: body.description }),
       ...(body.thumbnail   !== undefined && { thumbnail:   body.thumbnail }),
+      ...(body.color       !== undefined && { color:       body.color }),
+      ...(body.icon        !== undefined && { icon:        body.icon }),
       ...(body.shapes      !== undefined && { shapes:      JSON.stringify(body.shapes) }),
       ...(body.isPublic    !== undefined && { isPublic:    body.isPublic }),
+      ...(body.publicRole  !== undefined && { publicRole:  body.publicRole }),
       ...(body.isPinned    !== undefined && { isPinned:    body.isPinned }),
     },
   });

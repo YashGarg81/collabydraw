@@ -187,9 +187,9 @@ export async function POST(req: NextRequest) {
     if (userId) {
       const user = await client.user.findUnique({
         where: { id: userId },
-        select: { plan: true, aiCredits: true },
+        select: { plan: true, aiCredits: true, trialEndsAt: true },
       });
-      const limits = getPlanLimits(user?.plan ?? "FREE");
+      const limits = getPlanLimits(user?.plan ?? "FREE", user?.trialEndsAt);
       if (limits.aiCreditsMonthly !== Infinity && (user?.aiCredits ?? 0) <= 0) {
         return NextResponse.json(
           { error: "NO_AI_CREDITS", message: "You've used all your AI credits. Upgrade to Pro for more." },
@@ -202,8 +202,8 @@ export async function POST(req: NextRequest) {
 
     // Decrement 1 credit
     if (userId) {
-      const user = await client.user.findUnique({ where: { id: userId }, select: { plan: true } });
-      const limits = getPlanLimits(user?.plan ?? "FREE");
+      const user = await client.user.findUnique({ where: { id: userId }, select: { plan: true, trialEndsAt: true } });
+      const limits = getPlanLimits(user?.plan ?? "FREE", user?.trialEndsAt);
       if (limits.aiCreditsMonthly !== Infinity) {
         await client.user.update({ where: { id: userId }, data: { aiCredits: { decrement: 1 } } });
       }

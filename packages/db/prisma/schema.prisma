@@ -3,6 +3,7 @@
 
 generator client {
   provider = "prisma-client-js"
+  output   = "../generated/client"
 }
 
 // ── Database ──────────────────────────────────────────────────────────────────
@@ -10,7 +11,7 @@ generator client {
 // Production:   DATABASE_URL="postgresql://..."         (PostgreSQL / Neon / Supabase)
 // Switch by changing the provider env var and re-running: pnpm exec prisma migrate deploy
 datasource db {
-  provider = env("DATABASE_PROVIDER") // "sqlite" | "postgresql"
+  provider = "sqlite" // Change to "postgresql" for production
   url      = env("DATABASE_URL")
 }
 
@@ -30,12 +31,29 @@ model User {
   plan          String    @default("FREE")
   aiCredits     Int       @default(50)
 
+  // Phase 4/5: Stripe billing & Roles
+  stripeCustomerId     String? @unique
+  stripeSubscriptionId String? @unique
+  subscriptionStatus   String? // active | trialing | canceled | past_due
+  
+  // Phase 5: SaaS Monetization fields
+  role          String    @default("USER") // USER | ADMIN
+  trialEndsAt   DateTime?
+  referralCode  String?   @unique
+  referredById  String?
+  referredBy    User?     @relation("Referrals", fields: [referredById], references: [id])
+  referrals     User[]    @relation("Referrals")
+
   boards        Board[]
   members       BoardMember[]
   accounts      Account[]
   sessions      Session[]
   Room          Room[]
   Shape         Shape[]
+  folders       Folder[]
+  notifications Notification[]
+  subscriptions Subscription[]
+  aiUsageLogs   AiUsage[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -81,13 +99,18 @@ model Board {
   name        String   @default("Untitled Board")
   description String?
   thumbnail   String?
+  color       String?
+  icon        String?
   ownerId     String
   owner       User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   isPublic    Boolean  @default(false)
+  publicRole  String   @default("NONE") // NONE | VIEWER | EDITOR
   isPinned    Boolean  @default(false)
   shapes      String   @default("[]")  // JSON stringified shapes array
   members     BoardMember[]
   room        Room?
+  folderBoards FolderBoard[]
+  invites     BoardInvite[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -136,3 +159,102 @@ model BoardSnapshot {
 
   @@index([boardId, createdAt])
 }
+
+// Phase 4: Workspace Folders
+model Folder {
+  id      String  @id @default(cuid())
+  name    String
+  ownerId String
+  owner   User    @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  boards  FolderBoard[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model FolderBoard {
+  folderId String
+  boardId  String
+  folder   Folder @relation(fields: [folderId], references: [id], onDelete: Cascade)
+  board    Board  @relation(fields: [boardId], references: [id], onDelete: Cascade)
+
+  @@id([folderId, boardId])
+}
+
+// Phase 4: Template Gallery
+model Template {
+  id          String  @id @default(cuid())
+  name        String
+  description String?
+  category    String  @default("general") // general | wireframe | mindmap | retro | kanban | flowchart | org
+  preview     String? // URL or base64 thumbnail
+  shapes      String  @default("[]") // JSON stringified shapes
+  isPublic    Boolean @default(true)
+  usageCount  Int     @default(0)
+
+  createdAt DateTime @default(now())
+}
+
+// Phase 4: Board Invites
+model BoardInvite {
+  id        String   @id @default(cuid())
+  boardId   String
+  board     Board    @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  email     String
+  role      String   @default("VIEWER")
+  token     String   @unique @default(cuid())
+  expiresAt DateTime
+  accepted  Boolean  @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@index([token])
+}
+
+// Phase 4: Activity Notifications
+model Notification {
+  id      String  @id @default(cuid())
+  userId  String
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type    String  // board_invite | comment_added | board_shared | member_joined
+  payload String  @default("{}") // JSON: { boardId, boardName, actorName, message, ... }
+  read    Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, read])
+}
+
+// Phase 5: Subscription Model
+model Subscription {
+  id                   String   @id @default(cuid())
+  userId               String
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  stripeSubscriptionId String   @unique
+  stripeCustomerId     String
+  stripePriceId        String
+  status               String   // active, canceled, past_due, trialing
+  currentPeriodEnd     DateTime
+  cancelAtPeriodEnd    Boolean  @default(false)
+  
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@index([userId])
+}
+
+// Phase 5: AI Usage Tracking
+model AiUsage {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  action    String   // e.g., "diagram_generation", "credit_purchase"
+  credits   Int      // positive for purchase, negative for usage
+  metadata  String?  // JSON string for additional details
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+

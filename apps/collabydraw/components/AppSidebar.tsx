@@ -18,6 +18,7 @@ import {
     Upload,
     Linkedin,
     Share2,
+    LogIn,
 } from "lucide-react"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
@@ -128,7 +129,10 @@ export function AppSidebar({ isOpen, onClose, canvasColor, setCanvasColor, isMob
                             {session?.user && session?.user.id ? (
                                 <SidebarItem icon={LogOut} label="Log Out" onClick={() => signOut({ callbackUrl: '/' })} />
                             ) : (
-                                <SidebarItem icon={UserPlus} onClick={() => redirect('/auth/signup')} label="Sign up" className="text-color-promo hover:text-color-promo font-bold" />
+                                <div className="flex flex-col gap-1">
+                                    <SidebarItem icon={LogIn} onClick={() => window.location.href = '/auth/signin'} label="Sign in" />
+                                    <SidebarItem icon={UserPlus} onClick={() => window.location.href = '/auth/signup'} label="Sign up" className="text-color-promo hover:text-color-promo font-bold" />
+                                </div>
                             )}
 
                             <Separator className="my-4 dark:bg-default-border-color-dark" />

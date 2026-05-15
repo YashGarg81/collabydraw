@@ -228,7 +228,7 @@ export const TEMPLATES: Template[] = [
     previewColor: "from-amber-600/40 to-orange-600/20",
     shapes: [
       // Center
-      ...ellipse(600, 300, 80, 40, "Product 2025"),
+      ...ellipse(600, 300, 80, 40, "Product 2026"),
       // Q branches
       ...arrow(520, 300, 380, 200), ...rect(280, 175, 120, 50, "Q1: Launch"),
       ...arrow(520, 290, 380, 130), ...rect(280, 105, 120, 50, "Auth & Boards"),

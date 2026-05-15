@@ -60,9 +60,9 @@ export async function POST(req: NextRequest) {
     if (userId) {
       const user = await client.user.findUnique({
         where: { id: userId },
-        select: { plan: true, aiCredits: true },
+        select: { plan: true, aiCredits: true, trialEndsAt: true },
       });
-      const limits = getPlanLimits(user?.plan ?? "FREE");
+      const limits = getPlanLimits(user?.plan ?? "FREE", user?.trialEndsAt);
 
       if (limits.aiCreditsMonthly !== Infinity && (user?.aiCredits ?? 0) <= 0) {
         return NextResponse.json(
@@ -125,9 +125,9 @@ export async function POST(req: NextRequest) {
     if (userId) {
       const user = await client.user.findUnique({
         where: { id: userId },
-        select: { plan: true },
+        select: { plan: true, trialEndsAt: true },
       });
-      const limits = getPlanLimits(user?.plan ?? "FREE");
+      const limits = getPlanLimits(user?.plan ?? "FREE", user?.trialEndsAt);
       if (limits.aiCreditsMonthly !== Infinity) {
         await client.user.update({
           where: { id: userId },

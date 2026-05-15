@@ -3,7 +3,7 @@
 import { signUp } from "@/actions/auth";
 import { zodResolver } from "@hookform/resolvers/zod"
 import { SignupSchema } from "@repo/common/types";
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { toast } from "sonner";
 import { z } from 'zod';
@@ -13,6 +13,7 @@ import { Input } from "../ui/input";
 import { useTransition, useState } from "react";
 import { signIn } from "next-auth/react";
 import { Loader2 } from "lucide-react";
+import { useEffect } from "react";
 
 type SignUpFormValues = z.infer<typeof SignupSchema>;
 
@@ -52,7 +53,15 @@ function SocialButton({ provider, label, icon }: { provider: "google" | "github"
 
 export function SignUpForm() {
     const router = useRouter();
+    const searchParams = useSearchParams();
+    const [referralId, setReferralId] = useState<string | null>(null);
     const [isPending, startTransition] = useTransition();
+
+    useEffect(() => {
+        const urlRef = searchParams.get("ref");
+        const localRef = localStorage.getItem("collabydraw_ref");
+        setReferralId(urlRef || localRef);
+    }, [searchParams]);
 
     const form = useForm<SignUpFormValues>({
         resolver: zodResolver(SignupSchema),
@@ -62,7 +71,7 @@ export function SignUpForm() {
     async function onSubmit(values: SignUpFormValues) {
         startTransition(async () => {
             try {
-                const signUpResult = await signUp(values);
+                const signUpResult = await signUp(values, referralId || undefined);
                 if (signUpResult.error) { toast.error(signUpResult.error); return; }
                 const signInResult = await signIn("credentials", {
                     email: values.email, password: values.password, redirect: false,

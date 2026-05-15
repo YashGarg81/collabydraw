@@ -33,6 +33,9 @@ import { AiBoardActions } from "../AiBoardActions";
 import { ShareModal } from "../ShareModal";
 import { VersionHistory } from "../VersionHistory";
 import { LiveCursors, useRemoteCursors } from "../LiveCursors";
+import { LayersPanel } from "../LayersPanel";
+import { Rulers } from "../Rulers";
+import { CommentThread } from "./CommentThread";
 
 export default function CanvasBoard() {
     const { data: session, status } = useSession();
@@ -45,6 +48,7 @@ export default function CanvasBoard() {
     const [participants, setParticipants] = useState<RoomParticipants[]>([]);
     const [isConnected, setIsConnected] = useState(false);
     const [isCanvasReady, setIsCanvasReady] = useState(false);
+    const [followingUserId, setFollowingUserId] = useState<string | null>(null);
     const initializedWithMode = useRef<Mode | null>(null);
 
     // ── Phase 2: Command Palette + Shortcuts + Autosave ────────────────────
@@ -60,9 +64,16 @@ export default function CanvasBoard() {
     const [shareOpen, setShareOpen] = useState(false);
     const [boardId, setBoardId] = useState<string | null>(null);
     const [boardIsPublic, setBoardIsPublic] = useState(false);
+    const [boardPublicRole, setBoardPublicRole] = useState("NONE");
+    const [userRole, setUserRole] = useState<string>("VIEWER");
     const [boardName, setBoardName] = useState("Untitled Board");
     // ── Phase 5: Version history + live cursors ─────────────────────────────
     const [versionHistoryOpen, setVersionHistoryOpen] = useState(false);
+    // ── Phase 2: Layers + Rulers ─────────────────────────────────────────────
+    const [layersOpen, setLayersOpen] = useState(false);
+    const [showRulers, setShowRulers] = useState(false);
+    const [viewport, setViewport] = useState({ panX: 0, panY: 0, scale: 1 });
+    const [canvasSize, setCanvasSize] = useState({ w: 0, h: 0 });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const [remoteCursors, setRemoteCursors] = useState<Map<string, any>>(new Map());
     const { cursorsRef, updateCursor, renderRef } = useRemoteCursors();
@@ -154,7 +165,7 @@ export default function CanvasBoard() {
                 window.removeEventListener('hashchange', handleHashChange);
             }
         };
-    }, [pathname, searchParams, status, session]);
+    }, [pathname, searchParams, status, session, router]);
 
     useEffect(() => {
         setCanvasEngineState(prev => ({ ...prev, canvasColor: canvasBgLight[0] }));
@@ -345,6 +356,9 @@ export default function CanvasBoard() {
         engine.onViewChange = (embeds, panX, panY, scale) => {
             // Update viewport offset for minimap indicator
             setViewportOffset({ x: panX, y: panY });
+            // Update viewport for Rulers
+            setViewport({ panX, panY, scale });
+            setCanvasSize({ w: window.innerWidth, h: window.innerHeight });
             // Sync shapes on every view change (pan/zoom can reveal moved shapes)
             setCanvasShapes(engine.getShapes());
             setCanvasEngineState(prev => {
@@ -429,10 +443,16 @@ export default function CanvasBoard() {
                 const data = await res.json();
                 if (data.board?.name) setBoardName(data.board.name);
                 if (data.board?.isPublic !== undefined) setBoardIsPublic(data.board.isPublic);
+                if (data.board?.publicRole !== undefined) setBoardPublicRole(data.board.publicRole);
+                if (data.role) {
+                    setUserRole(data.role);
+                    if (data.role === "VIEWER" && canvasEngineState.engine) {
+                        canvasEngineState.engine.isReadOnly = true;
+                    }
+                }
             }
         });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [canvasEngineState.engine]);
+    }, [boardId, canvasEngineState.engine, pathname]);
 
     const clearCanvas = useCallback(() => {
         canvasEngineState.engine?.clearAllShapes();
@@ -468,141 +488,190 @@ export default function CanvasBoard() {
                 : canvasEngineState.activeTool === "grab" && !canvasEngineState.sidebarOpen
                     ? canvasEngineState.grabbing ? "cursor-grabbing" : "cursor-grab"
                     : "cursor-crosshair")}>
-            <div className="App_Menu App_Menu_Top fixed z-[4] top-4 right-4 left-4 flex justify-center items-center xs670:grid xs670:grid-cols-[1fr_auto_1fr] xs670:gap-4 md:gap-8 xs670:items-start">
-                {matches && (
-                    <div className="Main_Menu_Stack Sidebar_Trigger_Button xs670:grid xs670:gap-[calc(.25rem*6)] grid-cols-[auto] grid-flow-row grid-rows auto-rows-min justify-self-start">
-                        <div className="relative flex items-center gap-1.5">
-                            <Link
-                                href="/dashboard"
-                                title="Go to Dashboard"
-                                className="flex items-center justify-center w-8 h-8 rounded-lg border border-white/10 bg-[#232329] hover:bg-violet-600/20 hover:border-violet-500/30 text-white/50 hover:text-violet-400 transition-all duration-200 group"
-                            >
-                                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 9.5L12 3l9 6.5V20a1 1 0 01-1 1H5a1 1 0 01-1-1V9.5z" />
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 21V12h6v9" />
-                                </svg>
-                            </Link>
-                            <AppMenuButton onClick={toggleSidebar} />
+            <div className="App_Menu App_Menu_Top fixed z-[4] top-4 right-4 left-4 flex items-start pointer-events-none gap-2">
+                <div className="flex-1 flex justify-start pointer-events-none">
+                    {matches && (
+                        <div className="pointer-events-auto Main_Menu_Stack Sidebar_Trigger_Button xs670:grid xs670:gap-[calc(.25rem*6)] grid-cols-[auto] grid-flow-row grid-rows auto-rows-min">
+                            <div className="relative flex items-center gap-1.5">
+                                <Link
+                                    href="/dashboard"
+                                    title="Go to Dashboard"
+                                    className="flex items-center justify-center w-8 h-8 rounded-lg border border-white/10 bg-[#232329] hover:bg-violet-600/20 hover:border-violet-500/30 text-white/50 hover:text-violet-400 transition-all duration-200 group"
+                                >
+                                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                        <path strokeLinecap="round" strokeLinejoin="round" d="M3 9.5L12 3l9 6.5V20a1 1 0 01-1 1H5a1 1 0 01-1-1V9.5z" />
+                                        <path strokeLinecap="round" strokeLinejoin="round" d="M9 21V12h6v9" />
+                                    </svg>
+                                </Link>
+                                <AppMenuButton onClick={toggleSidebar} />
 
-                            {canvasEngineState.sidebarOpen && (
-                                <AppSidebar
-                                    isOpen={canvasEngineState.sidebarOpen}
-                                    onClose={() => setCanvasEngineState(prev => ({ ...prev, sidebarOpen: false }))}
-                                    canvasColor={canvasEngineState.canvasColor}
-                                    setCanvasColor={(newCanvasColor: SetStateAction<string>) =>
-                                        setCanvasEngineState(prev => ({ ...prev, canvasColor: typeof newCanvasColor === 'function' ? newCanvasColor(prev.canvasColor) : newCanvasColor }))
-                                    }
-                                    isStandalone={mode === 'room' ? false : true}
-                                    onClearCanvas={clearCanvas}
-                                    onExportCanvas={() => canvasEngineState.engine?.exportToPNG()}
-                                    onImportCanvas={() => importJsonInputRef.current?.click()}
+                                {canvasEngineState.sidebarOpen && (
+                                    <AppSidebar
+                                        isOpen={canvasEngineState.sidebarOpen}
+                                        onClose={() => setCanvasEngineState(prev => ({ ...prev, sidebarOpen: false }))}
+                                        canvasColor={canvasEngineState.canvasColor}
+                                        setCanvasColor={(newCanvasColor: SetStateAction<string>) =>
+                                            setCanvasEngineState(prev => ({ ...prev, canvasColor: typeof newCanvasColor === 'function' ? newCanvasColor(prev.canvasColor) : newCanvasColor }))
+                                        }
+                                        isStandalone={mode === 'room' ? false : true}
+                                        onClearCanvas={clearCanvas}
+                                        onExportCanvas={() => canvasEngineState.engine?.exportToPNG()}
+                                        onImportCanvas={() => importJsonInputRef.current?.click()}
+                                    />
+                                )}
+                                {/* Phase 6: hidden file input for JSON import */}
+                                <input
+                                    ref={importJsonInputRef}
+                                    type="file"
+                                    accept=".json"
+                                    className="hidden"
+                                    onChange={async (e) => {
+                                        const file = e.target.files?.[0];
+                                        if (!file || !canvasEngineState.engine) return;
+                                        try {
+                                            const text = await file.text();
+                                            const parsed = JSON.parse(text);
+                                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                                            const shapes: any[] = Array.isArray(parsed) ? parsed : parsed.shapes ?? [];
+                                            if (!Array.isArray(shapes) || shapes.length === 0) throw new Error("empty");
+                                            canvasEngineState.engine.addShapes(shapes);
+                                        } catch {
+                                            alert("Could not import: invalid JSON file. Must be exported from CollabyDraw.");
+                                        }
+                                        if (importJsonInputRef.current) importJsonInputRef.current.value = "";
+                                    }}
                                 />
-                            )}
-                            {/* Phase 6: hidden file input for JSON import */}
-                            <input
-                                ref={importJsonInputRef}
-                                type="file"
-                                accept=".json"
-                                className="hidden"
-                                onChange={async (e) => {
-                                    const file = e.target.files?.[0];
-                                    if (!file || !canvasEngineState.engine) return;
-                                    try {
-                                        const text = await file.text();
-                                        const parsed = JSON.parse(text);
-                                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                                        const shapes: any[] = Array.isArray(parsed) ? parsed : parsed.shapes ?? [];
-                                        if (!Array.isArray(shapes) || shapes.length === 0) throw new Error("empty");
-                                        canvasEngineState.engine.addShapes(shapes);
-                                    } catch {
-                                        alert("Could not import: invalid JSON file. Must be exported from CollabyDraw.");
-                                    }
-                                    if (importJsonInputRef.current) importJsonInputRef.current.value = "";
-                                }}
+
+                                {canvasEngineState.activeTool === "grab" && canvasEngineState.isCanvasEmpty && (
+                                    <MainMenuWelcome />
+                                )}
+
+                            </div>
+
+
+                            <StyleConfigurator
+                                activeTool={canvasEngineState.activeTool}
+                                strokeFill={canvasEngineState.strokeFill}
+                                setStrokeFill={(newStrokeFill: SetStateAction<StrokeFill>) =>
+                                    setCanvasEngineState(prev => ({ ...prev, strokeFill: typeof newStrokeFill === 'function' ? newStrokeFill(prev.strokeFill) : newStrokeFill }))
+                                }
+                                strokeWidth={canvasEngineState.strokeWidth}
+                                setStrokeWidth={(newStrokeWidth: SetStateAction<StrokeWidth>) =>
+                                    setCanvasEngineState(prev => ({ ...prev, strokeWidth: typeof newStrokeWidth === 'function' ? newStrokeWidth(prev.strokeWidth) : newStrokeWidth }))
+                                }
+                                bgFill={canvasEngineState.bgFill}
+                                setBgFill={(newBgFill: SetStateAction<BgFill>) =>
+                                    setCanvasEngineState(prev => ({ ...prev, bgFill: typeof newBgFill === 'function' ? newBgFill(prev.bgFill) : newBgFill }))
+                                }
+                                strokeEdge={canvasEngineState.strokeEdge}
+                                setStrokeEdge={(newStrokeEdge: SetStateAction<StrokeEdge>) =>
+                                    setCanvasEngineState(prev => ({ ...prev, strokeEdge: typeof newStrokeEdge === 'function' ? newStrokeEdge(prev.strokeEdge) : newStrokeEdge }))
+                                }
+                                strokeStyle={canvasEngineState.strokeStyle}
+                                setStrokeStyle={(newStrokeStyle: SetStateAction<StrokeStyle>) =>
+                                    setCanvasEngineState(prev => ({ ...prev, strokeStyle: typeof newStrokeStyle === 'function' ? newStrokeStyle(prev.strokeStyle) : newStrokeStyle }))
+                                }
+
+                                roughStyle={canvasEngineState.roughStyle}
+                                setRoughStyle={(newRoughStyle: SetStateAction<RoughStyle>) =>
+                                    setCanvasEngineState(prev => ({ ...prev, roughStyle: typeof newRoughStyle === 'function' ? newRoughStyle(prev.roughStyle) : newRoughStyle }))
+                                }
+
+                                fillStyle={canvasEngineState.fillStyle}
+                                setFillStyle={(newFillStyle: SetStateAction<FillStyle>) =>
+                                    setCanvasEngineState(prev => ({ ...prev, fillStyle: typeof newFillStyle === 'function' ? newFillStyle(prev.fillStyle) : newFillStyle }))
+                                }
+
+                                fontFamily={canvasEngineState.fontFamily}
+                                setFontFamily={(newFontFamily: SetStateAction<FontFamily>) =>
+                                    setCanvasEngineState(prev => ({ ...prev, fontFamily: typeof newFontFamily === 'function' ? newFontFamily(prev.fontFamily) : newFontFamily }))
+                                }
+
+                                fontSize={canvasEngineState.fontSize}
+                                setFontSize={(newFontSize: SetStateAction<FontSize>) =>
+                                    setCanvasEngineState(prev => ({ ...prev, fontSize: typeof newFontSize === 'function' ? newFontSize(prev.fontSize) : newFontSize }))
+                                }
+
+                                textAlign={canvasEngineState.textAlign}
+                                setTextAlign={(newTextAlign: SetStateAction<TextAlign>) =>
+                                    setCanvasEngineState(prev => ({ ...prev, textAlign: typeof newTextAlign === 'function' ? newTextAlign(prev.textAlign) : newTextAlign }))
+                                }
+                                fontStyle={canvasEngineState.fontStyle}
+                                setFontStyle={(newFontStyle: SetStateAction<FontStyle>) =>
+                                    setCanvasEngineState(prev => ({ ...prev, fontStyle: typeof newFontStyle === 'function' ? newFontStyle(prev.fontStyle) : newFontStyle }))
+                                }
                             />
 
-                            {canvasEngineState.activeTool === "grab" && canvasEngineState.isCanvasEmpty && (
-                                <MainMenuWelcome />
-                            )}
-
                         </div>
+                    )}
+                </div>
+                <div className="shrink-0 pointer-events-auto">
+                    <ToolSelector
+                        selectedTool={canvasEngineState.activeTool}
+                        onToolSelect={(newTool) =>
+                            setCanvasEngineState(prev => ({ ...prev, activeTool: newTool }))
+                        }
+                    />
+                </div>
 
-                        <StyleConfigurator
-                            activeTool={canvasEngineState.activeTool}
-                            strokeFill={canvasEngineState.strokeFill}
-                            setStrokeFill={(newStrokeFill: SetStateAction<StrokeFill>) =>
-                                setCanvasEngineState(prev => ({ ...prev, strokeFill: typeof newStrokeFill === 'function' ? newStrokeFill(prev.strokeFill) : newStrokeFill }))
-                            }
-                            strokeWidth={canvasEngineState.strokeWidth}
-                            setStrokeWidth={(newStrokeWidth: SetStateAction<StrokeWidth>) =>
-                                setCanvasEngineState(prev => ({ ...prev, strokeWidth: typeof newStrokeWidth === 'function' ? newStrokeWidth(prev.strokeWidth) : newStrokeWidth }))
-                            }
-                            bgFill={canvasEngineState.bgFill}
-                            setBgFill={(newBgFill: SetStateAction<BgFill>) =>
-                                setCanvasEngineState(prev => ({ ...prev, bgFill: typeof newBgFill === 'function' ? newBgFill(prev.bgFill) : newBgFill }))
-                            }
-                            strokeEdge={canvasEngineState.strokeEdge}
-                            setStrokeEdge={(newStrokeEdge: SetStateAction<StrokeEdge>) =>
-                                setCanvasEngineState(prev => ({ ...prev, strokeEdge: typeof newStrokeEdge === 'function' ? newStrokeEdge(prev.strokeEdge) : newStrokeEdge }))
-                            }
-                            strokeStyle={canvasEngineState.strokeStyle}
-                            setStrokeStyle={(newStrokeStyle: SetStateAction<StrokeStyle>) =>
-                                setCanvasEngineState(prev => ({ ...prev, strokeStyle: typeof newStrokeStyle === 'function' ? newStrokeStyle(prev.strokeStyle) : newStrokeStyle }))
-                            }
-
-                            roughStyle={canvasEngineState.roughStyle}
-                            setRoughStyle={(newRoughStyle: SetStateAction<RoughStyle>) =>
-                                setCanvasEngineState(prev => ({ ...prev, roughStyle: typeof newRoughStyle === 'function' ? newRoughStyle(prev.roughStyle) : newRoughStyle }))
-                            }
-
-                            fillStyle={canvasEngineState.fillStyle}
-                            setFillStyle={(newFillStyle: SetStateAction<FillStyle>) =>
-                                setCanvasEngineState(prev => ({ ...prev, fillStyle: typeof newFillStyle === 'function' ? newFillStyle(prev.fillStyle) : newFillStyle }))
-                            }
-
-                            fontFamily={canvasEngineState.fontFamily}
-                            setFontFamily={(newFontFamily: SetStateAction<FontFamily>) =>
-                                setCanvasEngineState(prev => ({ ...prev, fontFamily: typeof newFontFamily === 'function' ? newFontFamily(prev.fontFamily) : newFontFamily }))
-                            }
-
-                            fontSize={canvasEngineState.fontSize}
-                            setFontSize={(newFontSize: SetStateAction<FontSize>) =>
-                                setCanvasEngineState(prev => ({ ...prev, fontSize: typeof newFontSize === 'function' ? newFontSize(prev.fontSize) : newFontSize }))
-                            }
-
-                            textAlign={canvasEngineState.textAlign}
-                            setTextAlign={(newTextAlign: SetStateAction<TextAlign>) =>
-                                setCanvasEngineState(prev => ({ ...prev, textAlign: typeof newTextAlign === 'function' ? newTextAlign(prev.textAlign) : newTextAlign }))
-                            }
-                            fontStyle={canvasEngineState.fontStyle}
-                            setFontStyle={(newFontStyle: SetStateAction<FontStyle>) =>
-                                setCanvasEngineState(prev => ({ ...prev, fontStyle: typeof newFontStyle === 'function' ? newFontStyle(prev.fontStyle) : newFontStyle }))
-                            }
+                <div className="flex-1 flex justify-end pointer-events-none">
+                    {matches && (
+                        <div className="pointer-events-auto flex items-start gap-1.5 flex-wrap justify-end">
+                        <CollaborationToolbar 
+                            participants={participants} 
+                            hash={currentHashRef.current} 
+                            followingUserId={followingUserId}
+                            onFollowUser={(id) => {
+                                const next = followingUserId === id ? null : id;
+                                setFollowingUserId(next);
+                                if (canvasEngineState?.engine) {
+                                    canvasEngineState.engine.follow(next);
+                                }
+                            }}
                         />
-
-                    </div>
-                )}
-                <ToolSelector
-                    selectedTool={canvasEngineState.activeTool}
-                    onToolSelect={(newTool: SetStateAction<ToolType>) =>
-                        setCanvasEngineState(prev => ({ ...prev, activeTool: typeof newTool === 'function' ? newTool(prev.activeTool) : newTool }))
-                    }
-                />
-
-                {matches && (
-                    <div className="flex items-center gap-2">
-                        <CollaborationToolbar participants={participants} hash={currentHashRef.current} />
+                        {/* Rulers toggle */}
+                        <button
+                            onClick={() => setShowRulers(p => !p)}
+                            title="Toggle Rulers"
+                            className={cn(
+                                "flex items-center gap-1.5 h-8 px-2 md:px-3 rounded-lg border text-xs font-medium transition-all",
+                                showRulers
+                                    ? "border-violet-500/40 bg-violet-600/20 text-violet-300"
+                                    : "border-white/10 bg-[#232329] hover:bg-[#31303b] text-white/60 hover:text-white/90"
+                            )}
+                        >
+                            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M3 7h18M3 7v10M3 7l3-3M7 7v3M11 7v3M15 7v3M19 7v3" />
+                            </svg>
+                            <span className="hidden xl:inline">Rulers</span>
+                        </button>
+                        {/* Layers button */}
+                        <button
+                            onClick={() => setLayersOpen(p => !p)}
+                            title="Layers Panel"
+                            className={cn(
+                                "flex items-center gap-1.5 h-8 px-2 md:px-3 rounded-lg border text-xs font-medium transition-all",
+                                layersOpen
+                                    ? "border-violet-500/40 bg-violet-600/20 text-violet-300"
+                                    : "border-white/10 bg-[#232329] hover:bg-[#31303b] text-white/60 hover:text-white/90"
+                            )}
+                        >
+                            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+                            </svg>
+                            <span className="hidden xl:inline">Layers</span>
+                        </button>
                         {/* Version History button */}
                         {boardId && (
                             <button
                                 onClick={() => setVersionHistoryOpen(true)}
                                 title="Version History"
-                                className="flex items-center gap-1.5 h-8 px-3 rounded-lg border border-white/10 bg-[#232329] hover:bg-[#31303b] text-white/60 hover:text-white/90 text-xs font-medium transition-all"
+                                className="flex items-center gap-1.5 h-8 px-2 md:px-3 rounded-lg border border-white/10 bg-[#232329] hover:bg-[#31303b] text-white/60 hover:text-white/90 text-xs font-medium transition-all"
                             >
                                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                                     <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                                 </svg>
-                                History
+                                <span className="hidden xl:inline">History</span>
                             </button>
                         )}
                         {/* Share button */}
@@ -610,16 +679,17 @@ export default function CanvasBoard() {
                             <button
                                 onClick={() => setShareOpen(true)}
                                 title="Share board"
-                                className="flex items-center gap-1.5 h-8 px-3 rounded-lg border border-white/10 bg-[#232329] hover:bg-[#31303b] text-white/60 hover:text-white/90 text-xs font-medium transition-all"
+                                className="flex items-center gap-1.5 h-8 px-2 md:px-3 rounded-lg border border-white/10 bg-[#232329] hover:bg-[#31303b] text-white/60 hover:text-white/90 text-xs font-medium transition-all"
                             >
                                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                                     <path strokeLinecap="round" strokeLinejoin="round" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
                                 </svg>
-                                Share
+                                <span className="hidden xl:inline">Share</span>
                             </button>
                         )}
                     </div>
                 )}
+                </div>
             </div>
 
             {canvasEngineState.activeTool === "grab" && canvasEngineState.isCanvasEmpty && !isLoading && (
@@ -836,14 +906,31 @@ export default function CanvasBoard() {
                 />
             )}
 
+            {/* Comments Overlay */}
+            {canvasShapes.filter(s => s.type === "comment").map(comment => (
+                <CommentThread
+                    key={comment.id}
+                    comment={comment as unknown as Parameters<typeof CommentThread>[0]["comment"]}
+                    panX={canvasEngineState.embedData.panX}
+                    panY={canvasEngineState.embedData.panY}
+                    scale={canvasEngineState.scale}
+                    currentUserId={session?.user?.id || "guest"}
+                    currentUserName={session?.user?.name || "Guest"}
+                    onUpdate={(updated) => canvasEngineState.engine?.updateShape(updated)}
+                    onDelete={(id) => canvasEngineState.engine?.removeShape(id)}
+                />
+            ))}
+
             {/* Share Modal — Phase 4 + enhanced in Phase 5 */}
             {shareOpen && boardId && (
                 <ShareModal
                     boardId={boardId}
                     boardName={boardName}
                     isPublic={boardIsPublic}
+                    publicRole={boardPublicRole}
                     onClose={() => setShareOpen(false)}
                     onTogglePublic={(val) => setBoardIsPublic(val)}
+                    onUpdateRole={(val) => setBoardPublicRole(val)}
                     onExport={() => canvasEngineState.engine?.exportToPNG()}
                     onExportSVG={() => canvasEngineState.engine?.exportToSVG()}
                     onExportJSON={() => canvasEngineState.engine?.exportToJSON()}
@@ -864,6 +951,24 @@ export default function CanvasBoard() {
                     }}
                 />
             )}
-        </div >
+
+            {/* Phase 2: Layers Panel */}
+            <LayersPanel
+                engine={canvasEngineState.engine}
+                isOpen={layersOpen}
+                onClose={() => setLayersOpen(false)}
+            />
+
+            {/* Phase 2: Rulers */}
+            {showRulers && canvasSize.w > 0 && (
+                <Rulers
+                    panX={viewport.panX}
+                    panY={viewport.panY}
+                    scale={viewport.scale}
+                    width={canvasSize.w}
+                    height={canvasSize.h}
+                />
+            )}
+        </div>
     )
 };

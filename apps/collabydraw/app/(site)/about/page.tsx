@@ -155,20 +155,11 @@ export default function AboutPage() {
                     <h3 className="mt-3 mb-1 lg:mt-8 lg:mb-2">📂 Github Repo</h3>
                     <p>
                         <a href="https://github.com/YashGarg81/collabydraw" target="_blank" rel="noopener noreferrer">
-                            github.com/coderomm/CollabyDraw
+                            https://github.com/YashGarg81/collabydraw
                         </a>
                     </p>
 
-                    <h3 className="mt-3 mb-1 lg:mt-8 lg:mb-2">📽️ YouTube Demo</h3>
-                    <div className="aspect-w-16 aspect-h-9 mb-4">
-                        <iframe
-                            className="w-full h-full rounded-md"
-                            src="https://www.youtube.com/embed/NNVdRCoFnK0"
-                            title="YouTube demo"
-                            frameBorder="0"
-                            allowFullScreen
-                        ></iframe>
-                    </div>
+
 
                 </div>
             </section>

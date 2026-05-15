@@ -1,4 +1,4 @@
-﻿const detailsContent = String.raw`
+const detailsContent = String.raw`
 ---
 
 **CollabyDraw** is a web-based collaborative whiteboard where multiple users can draw, edit, and brainstorm together in real time. Whether solo or in a group session, the app offers a smooth, intuitive canvas experience with real-time sync, shape tools, editable text, and privacy-focused end-to-end encryption — all without needing an account.
@@ -90,19 +90,8 @@ https://collabydraw.app/#room=abc123,xyz456
 
 ### 📂 Github Repo
 
-[github.com/coderomm/CollabyDraw](https://github.com/YashGarg81/collabydraw)
+[https://github.com/YashGarg81/collabydraw](https://github.com/YashGarg81/collabydraw)
 
----
-
-### 📽️ YouTube Demo
-
-<iframe width="100%" height="400" src="https://www.youtube.com/embed/NNVdRCoFnK0" frameborder="0" allowfullscreen></iframe>
-
----
-
-### 🐦 Tweet Embed
-
-<Tweet id="1711737824058880576" />
 
 `;
 

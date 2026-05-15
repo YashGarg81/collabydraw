@@ -1,4 +1,4 @@
-﻿import Link from "next/link";
+import Link from "next/link";
 // Canvas is at /canvas; landing page owns /
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/utils/auth";
@@ -63,7 +63,7 @@ export default async function SiteLayout({ children }: { children: React.ReactNo
                 <path d="M12 2L2 7l10 5 10-5-10-5z" /><path d="M2 17l10 5 10-5" /><path d="M2 12l10 5 10-5" />
               </svg>
             </div>
-            <span className="text-white/40 text-sm">© 2025 CollabyDraw. All rights reserved.</span>
+            <span className="text-white/40 text-sm">© 2026 CollabyDraw. All rights reserved.</span>
           </div>
           <div className="flex items-center gap-6 text-sm text-white/40">
             <Link href="/about" className="hover:text-white/70 transition-colors">About</Link>

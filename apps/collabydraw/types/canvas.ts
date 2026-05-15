@@ -42,7 +42,8 @@ export type ToolType =
   | "laser"
   | "lasso"
   | "frame"
-  | "embed";
+  | "embed"
+  | "comment";
 export type Tool = {
   type: ToolType;
   icon: React.ReactNode;
@@ -132,6 +133,17 @@ export type Shape = BaseShape & (
       strokeStyle: StrokeStyle;
       roughStyle: RoughStyle;
       fillStyle: FillStyle;
+    }
+  | {
+      id: string | null;
+      type: "comment";
+      x: number;
+      y: number;
+      text: string;
+      userId: string;
+      userName: string;
+      replies?: { id: string, userId: string, userName: string, text: string, createdAt: string }[];
+      resolved?: boolean;
     }
   | {
       id: string | null;
