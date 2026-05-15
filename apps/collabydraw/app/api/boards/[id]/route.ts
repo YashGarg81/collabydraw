@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/utils/auth";
 import client from "@repo/db/client";
-import { fireWebhook } from "../../../lib/webhooks";
+import { fireWebhook } from "../../../../lib/webhooks";
 
 type Params = { params: Promise<{ id: string }> };
 
