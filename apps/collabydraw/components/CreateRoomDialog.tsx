@@ -33,17 +33,17 @@ export default function CreateRoomDialog({ open, onOpenChange }: { open: boolean
             });
             const result = await res.json();
             
-            if (res.ok && result.data?.id) {
+            if (res.ok && result.board?.id) {
                 // If there are shapes to transfer, update the board
                 if (initialShapes.length > 0) {
-                    await fetch(`/api/boards/${result.data.id}`, {
+                    await fetch(`/api/boards/${result.board.id}`, {
                         method: "PATCH",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ shapes: initialShapes })
                     });
                 }
                 toast.success("Live session started!");
-                router.push(`/canvas?board=${result.data.id}`);
+                router.push(`/canvas?board=${result.board.id}`);
                 onOpenChange(false);
             } else {
                 toast.error('Error: ' + (result.error || result.message || "Failed to create session"));
