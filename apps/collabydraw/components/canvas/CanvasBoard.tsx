@@ -69,6 +69,7 @@ export default function CanvasBoard() {
     const autosaveCountRef = useRef(0);
     renderRef.current = () => setRemoteCursors(new Map(cursorsRef.current));
     const canvasRef = useRef<HTMLCanvasElement>(null);
+    const importJsonInputRef = useRef<HTMLInputElement>(null);
     const currentHashRef = useRef<string>('');
     const [canvasEngineState, setCanvasEngineState] = useState({
         engine: null as CanvasEngine | null,
@@ -494,8 +495,31 @@ export default function CanvasBoard() {
                                     isStandalone={mode === 'room' ? false : true}
                                     onClearCanvas={clearCanvas}
                                     onExportCanvas={() => canvasEngineState.engine?.exportToPNG()}
+                                    onImportCanvas={() => importJsonInputRef.current?.click()}
                                 />
                             )}
+                            {/* Phase 6: hidden file input for JSON import */}
+                            <input
+                                ref={importJsonInputRef}
+                                type="file"
+                                accept=".json"
+                                className="hidden"
+                                onChange={async (e) => {
+                                    const file = e.target.files?.[0];
+                                    if (!file || !canvasEngineState.engine) return;
+                                    try {
+                                        const text = await file.text();
+                                        const parsed = JSON.parse(text);
+                                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                                        const shapes: any[] = Array.isArray(parsed) ? parsed : parsed.shapes ?? [];
+                                        if (!Array.isArray(shapes) || shapes.length === 0) throw new Error("empty");
+                                        canvasEngineState.engine.addShapes(shapes);
+                                    } catch {
+                                        alert("Could not import: invalid JSON file. Must be exported from CollabyDraw.");
+                                    }
+                                    if (importJsonInputRef.current) importJsonInputRef.current.value = "";
+                                }}
+                            />
 
                             {canvasEngineState.activeTool === "grab" && canvasEngineState.isCanvasEmpty && (
                                 <MainMenuWelcome />

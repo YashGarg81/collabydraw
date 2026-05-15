@@ -46,11 +46,12 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   const updated = await client.board.update({
     where: { id },
     data: {
-      ...(body.name !== undefined && { name: body.name }),
+      ...(body.name        !== undefined && { name:        body.name }),
       ...(body.description !== undefined && { description: body.description }),
-      ...(body.thumbnail !== undefined && { thumbnail: body.thumbnail }),
-      ...(body.shapes !== undefined && { shapes: JSON.stringify(body.shapes) }),
-      ...(body.isPublic !== undefined && { isPublic: body.isPublic }),
+      ...(body.thumbnail   !== undefined && { thumbnail:   body.thumbnail }),
+      ...(body.shapes      !== undefined && { shapes:      JSON.stringify(body.shapes) }),
+      ...(body.isPublic    !== undefined && { isPublic:    body.isPublic }),
+      ...(body.isPinned    !== undefined && { isPinned:    body.isPinned }),
     },
   });
 

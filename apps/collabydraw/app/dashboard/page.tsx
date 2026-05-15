@@ -1,13 +1,14 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { signOut } from "next-auth/react";
 import {
   Plus, LayoutGrid, Search, MoreHorizontal, Trash2,
-  Pencil, LogOut, Loader2, Clock, Users, Globe, Zap, AlertTriangle
+  Pencil, LogOut, Loader2, Clock, Users, Globe, Zap,
+  AlertTriangle, Pin, PinOff, Copy, ArrowUpDown, Upload
 } from "lucide-react";
 import { PLAN_DISPLAY, PLAN_COLORS, type Plan } from "@/config/planLimits";
 
@@ -17,9 +18,13 @@ interface Board {
   description: string | null;
   thumbnail: string | null;
   isPublic: boolean;
+  isPinned: boolean;
+  shapeCount: number;
   updatedAt: string;
   _count: { members: number };
 }
+
+type SortOption = "newest" | "oldest" | "name";
 
 function formatRelative(dateStr: string): string {
   const diff = Date.now() - new Date(dateStr).getTime();
@@ -53,18 +58,21 @@ export default function DashboardPage() {
     plan: string; boardCount: number; boardLimit: number | null; atLimit: boolean; aiCredits: number;
   } | null>(null);
   const [search, setSearch] = useState("");
+  const [sort, setSort] = useState<SortOption>("newest");
+  const [sortOpen, setSortOpen] = useState(false);
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const [duplicating, setDuplicating] = useState<string | null>(null);
+  const importRef = useRef<HTMLInputElement>(null);
 
-  // Redirect unauthenticated users
   useEffect(() => {
     if (status === "unauthenticated") router.push("/auth/signin?callbackUrl=/dashboard");
   }, [status, router]);
 
-  const fetchBoards = useCallback(async () => {
+  const fetchBoards = useCallback(async (s: SortOption = "newest") => {
     try {
-      const res = await fetch("/api/boards");
+      const res = await fetch(`/api/boards?sort=${s}`);
       if (res.ok) {
         const data = await res.json();
         setBoards(data.boards);
@@ -76,8 +84,8 @@ export default function DashboardPage() {
   }, []);
 
   useEffect(() => {
-    if (status === "authenticated") fetchBoards();
-  }, [status, fetchBoards]);
+    if (status === "authenticated") fetchBoards(sort);
+  }, [status, fetchBoards, sort]);
 
   async function createBoard() {
     setPlanError(null);
@@ -90,10 +98,7 @@ export default function DashboardPage() {
       });
       if (res.status === 403) {
         const data = await res.json();
-        if (data.error === "PLAN_LIMIT") {
-          setPlanError(data.message);
-          return;
-        }
+        if (data.error === "PLAN_LIMIT") { setPlanError(data.message); return; }
       }
       if (res.ok) {
         const data = await res.json();
@@ -120,9 +125,84 @@ export default function DashboardPage() {
     });
   }
 
+  async function togglePin(board: Board) {
+    const next = !board.isPinned;
+    setBoards((prev) => {
+      const updated = prev.map((b) => b.id === board.id ? { ...b, isPinned: next } : b);
+      // Re-sort: pinned first
+      return [...updated.filter(b => b.isPinned), ...updated.filter(b => !b.isPinned)];
+    });
+    setOpenMenu(null);
+    await fetch(`/api/boards/${board.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ isPinned: next }),
+    });
+  }
+
+  async function duplicateBoard(board: Board) {
+    setDuplicating(board.id);
+    setOpenMenu(null);
+    try {
+      const res = await fetch("/api/boards", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ duplicateFrom: board.id }),
+      });
+      if (res.status === 403) {
+        const data = await res.json();
+        if (data.error === "PLAN_LIMIT") { setPlanError(data.message); return; }
+      }
+      if (res.ok) {
+        await fetchBoards(sort);
+      }
+    } finally {
+      setDuplicating(null);
+    }
+  }
+
+  // ── Import JSON board ────────────────────────────────────────────────
+  async function handleImportJSON(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      const shapes = Array.isArray(parsed) ? parsed : parsed.shapes;
+      if (!Array.isArray(shapes)) throw new Error("Invalid format");
+
+      // Create a new board then save shapes to it
+      const createRes = await fetch("/api/boards", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: file.name.replace(".json", "") || "Imported Board" }),
+      });
+      if (createRes.status === 403) {
+        const data = await createRes.json();
+        if (data.error === "PLAN_LIMIT") { setPlanError(data.message); return; }
+      }
+      if (createRes.ok) {
+        const { board } = await createRes.json();
+        await fetch(`/api/boards/${board.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ shapes }),
+        });
+        router.push(`/canvas?board=${board.id}`);
+      }
+    } catch {
+      alert("Could not import: invalid JSON file. Make sure it was exported from CollabyDraw.");
+    }
+    // Reset input
+    if (importRef.current) importRef.current.value = "";
+  }
+
   const filtered = boards.filter((b) =>
-    b.name.toLowerCase().includes(search.toLowerCase())
+    b.name.toLowerCase().includes(search.toLowerCase()) ||
+    (b.description ?? "").toLowerCase().includes(search.toLowerCase())
   );
+  const pinned = filtered.filter(b => b.isPinned);
+  const unpinned = filtered.filter(b => !b.isPinned);
 
   if (status === "loading" || (status === "authenticated" && loading)) {
     return (
@@ -133,6 +213,12 @@ export default function DashboardPage() {
   }
 
   if (status === "unauthenticated") return null;
+
+  const sortLabels: Record<SortOption, string> = {
+    newest: "Last updated",
+    oldest: "Oldest first",
+    name: "Name (A–Z)",
+  };
 
   return (
     <div className="min-h-screen bg-[#0a0a0f] text-white">
@@ -164,6 +250,15 @@ export default function DashboardPage() {
             <Zap className="w-4 h-4" />
             Templates
           </Link>
+          {/* Import JSON shortcut */}
+          <button
+            onClick={() => importRef.current?.click()}
+            className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-white/40 hover:text-white/70 hover:bg-white/5 text-sm transition-colors text-left"
+          >
+            <Upload className="w-4 h-4" />
+            Import JSON
+          </button>
+          <input ref={importRef} type="file" accept=".json" className="hidden" onChange={handleImportJSON} />
         </nav>
 
         {/* User + Plan */}
@@ -177,29 +272,33 @@ export default function DashboardPage() {
               <div className="text-xs text-white/35 truncate">{session?.user?.email}</div>
             </div>
           </div>
-          {/* Plan badge */}
           {planMeta && (
+            <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold mb-3 ${PLAN_COLORS[planMeta.plan as Plan] ?? "bg-white/10 text-white/60"}`}>
+              {PLAN_DISPLAY[planMeta.plan as Plan] ?? planMeta.plan}
+            </div>
+          )}
+          {planMeta && planMeta.boardLimit !== null && (
             <div className="mb-3">
-              <span className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border font-semibold ${PLAN_COLORS[planMeta.plan as Plan] ?? PLAN_COLORS.FREE}`}>
-                <Zap className="w-2.5 h-2.5" />
-                {PLAN_DISPLAY[(planMeta.plan as Plan)] ?? planMeta.plan} Plan
-              </span>
-              {planMeta.boardLimit !== null && (
-                <div className="mt-1.5 text-[10px] text-white/30">
-                  Boards: {planMeta.boardCount} / {planMeta.boardLimit}
-                  <div className="mt-1 h-1 rounded-full bg-white/8 overflow-hidden">
-                    <div
-                      className="h-full rounded-full bg-violet-500/60 transition-all"
-                      style={{ width: `${Math.min((planMeta.boardCount / planMeta.boardLimit) * 100, 100)}%` }}
-                    />
-                  </div>
-                </div>
-              )}
+              <div className="flex justify-between text-[10px] text-white/30 mb-1">
+                <span>Boards</span>
+                <span>{planMeta.boardCount} / {planMeta.boardLimit}</span>
+              </div>
+              <div className="h-1 rounded-full bg-white/8 overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-violet-500 to-indigo-500 transition-all"
+                  style={{ width: `${Math.min(100, (planMeta.boardCount / planMeta.boardLimit) * 100)}%` }}
+                />
+              </div>
+            </div>
+          )}
+          {planMeta && (
+            <div className="text-[10px] text-white/25 mb-3">
+              AI Credits: <span className="text-white/50 font-medium">{planMeta.aiCredits}</span>
             </div>
           )}
           <button
             onClick={() => signOut({ callbackUrl: "/" })}
-            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-white/40 hover:text-white/70 hover:bg-white/5 text-sm transition-colors"
+            className="flex items-center gap-2 text-white/35 hover:text-white/60 text-xs transition-colors w-full"
           >
             <LogOut className="w-3.5 h-3.5" />
             Sign out
@@ -208,180 +307,226 @@ export default function DashboardPage() {
       </aside>
 
       {/* Main */}
-      <div className="pl-60">
+      <main className="pl-60 min-h-screen">
         {/* Top bar */}
-        <header className="sticky top-0 z-20 h-16 border-b border-white/6 bg-[#0a0a0f]/95 backdrop-blur-xl flex items-center gap-4 px-6">
-          <div className="relative flex-1 max-w-sm">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30" />
-            <input
-              type="text"
-              placeholder="Search boards…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="w-full pl-9 pr-4 py-2 text-sm bg-white/5 border border-white/8 rounded-lg text-white placeholder:text-white/30 focus:outline-none focus:border-violet-500/50 focus:bg-white/7 transition"
-            />
+        <header className="sticky top-0 z-20 bg-[#0a0a0f]/90 backdrop-blur-xl border-b border-white/6 px-8 h-16 flex items-center justify-between gap-4">
+          <h1 className="text-base font-semibold text-white shrink-0">My Boards</h1>
+
+          <div className="flex items-center gap-3 flex-1 max-w-lg">
+            {/* Search */}
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-white/30" />
+              <input
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="Search boards…"
+                className="w-full h-8 pl-9 pr-3 rounded-lg bg-white/5 border border-white/8 text-sm text-white placeholder-white/25 focus:outline-none focus:border-violet-500/40 focus:bg-white/7 transition-all"
+              />
+            </div>
+
+            {/* Sort dropdown */}
+            <div className="relative">
+              <button
+                onClick={() => setSortOpen(p => !p)}
+                className="flex items-center gap-1.5 h-8 px-3 rounded-lg bg-white/5 border border-white/8 text-xs text-white/50 hover:text-white/80 hover:bg-white/8 transition-all"
+              >
+                <ArrowUpDown className="w-3 h-3" />
+                {sortLabels[sort]}
+              </button>
+              {sortOpen && (
+                <div className="absolute right-0 top-10 z-50 w-44 rounded-xl border border-white/10 bg-[#13131a]/98 backdrop-blur-2xl shadow-2xl p-1">
+                  {(["newest", "oldest", "name"] as SortOption[]).map(opt => (
+                    <button
+                      key={opt}
+                      onClick={() => { setSort(opt); setSortOpen(false); }}
+                      className={`w-full text-left px-3 py-2 text-xs rounded-lg transition-colors ${sort === opt ? "bg-violet-600/20 text-violet-300" : "text-white/60 hover:bg-white/5 hover:text-white"}`}
+                    >
+                      {sortLabels[opt]}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
+
           <button
             onClick={createBoard}
-            disabled={creating}
-            id="create-board-btn"
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-sm font-medium transition-all shadow-lg shadow-violet-500/20 hover:shadow-violet-500/35 disabled:opacity-60"
+            disabled={creating || (planMeta?.atLimit ?? false)}
+            className="flex items-center gap-1.5 h-8 px-4 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-xs font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
           >
-            {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-            New board
+            {creating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+            New Board
           </button>
         </header>
 
-        {/* Content */}
-        <main className="p-6">
-          {/* Plan limit error */}
+        <div className="p-8 space-y-8" onClick={() => { setOpenMenu(null); setSortOpen(false); }}>
+          {/* Plan error */}
           {planError && (
-            <div className="mb-4 flex items-start gap-3 p-4 rounded-xl border border-amber-500/30 bg-amber-500/8 text-amber-400">
-              <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-              <div className="flex-1">
-                <p className="text-sm font-medium">{planError}</p>
-                <p className="text-xs text-amber-400/60 mt-0.5">Stripe integration coming soon. Contact us to upgrade.</p>
+            <div className="flex items-start gap-3 p-4 rounded-xl border border-amber-500/20 bg-amber-500/8 text-amber-400">
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+              <div className="flex-1 text-sm">{planError}
+                <Link href="/pricing" className="ml-2 underline underline-offset-2 hover:text-amber-300">Upgrade →</Link>
               </div>
-              <button onClick={() => setPlanError(null)} className="text-amber-400/40 hover:text-amber-400 text-xs">✕</button>
+              <button onClick={() => setPlanError(null)} className="text-amber-400/50 hover:text-amber-400 text-xs">✕</button>
             </div>
           )}
-          <div className="mb-6">
-            <h1 className="text-xl font-semibold text-white flex items-center gap-3">
-              My Boards
-              {planMeta?.boardLimit !== null && planMeta && (
-                <span className="text-sm font-normal text-white/30">{planMeta.boardCount} / {planMeta.boardLimit} boards</span>
-              )}
-            </h1>
-            <p className="text-white/40 text-sm mt-0.5">{boards.length} board{boards.length !== 1 ? "s" : ""}</p>
-          </div>
 
-          {filtered.length === 0 && !loading ? (
+          {/* Empty state */}
+          {filtered.length === 0 && !loading && (
             <div className="flex flex-col items-center justify-center py-24 text-center">
-              <div className="w-16 h-16 rounded-2xl bg-violet-600/10 border border-violet-500/20 flex items-center justify-center mb-4">
-                <LayoutGrid className="w-7 h-7 text-violet-400" />
+              <div className="w-16 h-16 rounded-2xl bg-white/4 border border-white/8 flex items-center justify-center mb-4">
+                <LayoutGrid className="w-7 h-7 text-white/20" />
               </div>
-              <h2 className="text-lg font-semibold text-white mb-2">
-                {search ? "No boards match your search" : "No boards yet"}
-              </h2>
-              <p className="text-white/40 text-sm mb-6 max-w-xs">
-                {search ? "Try a different search term." : "Create your first board to start drawing and collaborating."}
-              </p>
-              {!search && (
-                <button
-                  onClick={createBoard}
-                  disabled={creating}
-                  className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-sm font-medium transition-all"
-                >
-                  <Plus className="w-4 h-4" />
-                  Create your first board
-                </button>
-              )}
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-              {/* Create new card */}
-              <button
-                onClick={createBoard}
-                disabled={creating}
-                className="group relative rounded-2xl border border-dashed border-white/15 hover:border-violet-500/50 bg-white/2 hover:bg-violet-600/5 transition-all flex flex-col items-center justify-center min-h-[200px] text-white/30 hover:text-violet-400"
-              >
-                <Plus className="w-8 h-8 mb-2 transition-transform group-hover:scale-110" />
-                <span className="text-sm font-medium">New board</span>
-              </button>
-
-              {filtered.map((board, i) => (
-                <div
-                  key={board.id}
-                  className="group relative rounded-2xl border border-white/8 bg-[#0d0d14] hover:border-white/15 transition-all overflow-hidden"
-                >
-                  {/* Thumbnail area */}
-                  <Link href={`/canvas?board=${board.id}`} className="block">
-                    <div className={`h-32 bg-gradient-to-br ${BOARD_COLORS[i % BOARD_COLORS.length]} flex items-center justify-center`}>
-                      <svg viewBox="0 0 120 80" className="w-24 opacity-40">
-                        <rect x="10" y="20" width="40" height="25" rx="4" fill="none" stroke="white" strokeWidth="1.5" />
-                        <rect x="70" y="20" width="40" height="25" rx="4" fill="none" stroke="white" strokeWidth="1.5" />
-                        <line x1="50" y1="32" x2="70" y2="32" stroke="white" strokeWidth="1.5" />
-                        <ellipse cx="60" cy="60" rx="18" ry="11" fill="none" stroke="white" strokeWidth="1.5" />
-                      </svg>
-                    </div>
-                  </Link>
-
-                  {/* Info */}
-                  <div className="p-4">
-                    {renamingId === board.id ? (
-                      <form
-                        onSubmit={(e) => { e.preventDefault(); renameBoard(board.id, renameValue); }}
-                        className="flex gap-2"
-                      >
-                        <input
-                          autoFocus
-                          value={renameValue}
-                          onChange={(e) => setRenameValue(e.target.value)}
-                          onBlur={() => renameBoard(board.id, renameValue)}
-                          className="flex-1 text-sm bg-white/5 border border-violet-500/50 rounded-md px-2 py-1 text-white focus:outline-none"
-                        />
-                      </form>
-                    ) : (
-                      <Link href={`/canvas?board=${board.id}`} className="block">
-                        <div className="font-medium text-white text-sm truncate mb-1 group-hover:text-violet-300 transition-colors">
-                          {board.name}
-                        </div>
-                      </Link>
-                    )}
-
-                    <div className="flex items-center gap-3 text-xs text-white/30">
-                      <span className="flex items-center gap-1">
-                        <Clock className="w-3 h-3" />
-                        {formatRelative(board.updatedAt)}
-                      </span>
-                      {board._count.members > 0 && (
-                        <span className="flex items-center gap-1">
-                          <Users className="w-3 h-3" />
-                          {board._count.members}
-                        </span>
-                      )}
-                      {board.isPublic && <Globe className="w-3 h-3 text-emerald-400" />}
-                    </div>
-                  </div>
-
-                  {/* Context menu trigger */}
-                  <button
-                    onClick={(e) => { e.stopPropagation(); setOpenMenu(openMenu === board.id ? null : board.id); }}
-                    className="absolute top-3 right-3 w-7 h-7 rounded-lg bg-black/30 hover:bg-black/50 flex items-center justify-center text-white/60 hover:text-white opacity-0 group-hover:opacity-100 transition-all backdrop-blur-sm"
-                  >
-                    <MoreHorizontal className="w-3.5 h-3.5" />
-                  </button>
-
-                  {/* Dropdown */}
-                  {openMenu === board.id && (
-                    <div className="absolute top-12 right-3 z-20 w-44 rounded-xl border border-white/10 bg-[#1a1a24] shadow-2xl shadow-black/50 overflow-hidden text-sm">
-                      <button
-                        onClick={() => { setRenamingId(board.id); setRenameValue(board.name); setOpenMenu(null); }}
-                        className="w-full flex items-center gap-2.5 px-4 py-3 text-white/70 hover:text-white hover:bg-white/5 transition-colors"
-                      >
-                        <Pencil className="w-3.5 h-3.5" />
-                        Rename
-                      </button>
-                      <button
-                        onClick={() => deleteBoard(board.id)}
-                        className="w-full flex items-center gap-2.5 px-4 py-3 text-red-400 hover:text-red-300 hover:bg-red-500/5 transition-colors"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        Delete
-                      </button>
-                    </div>
-                  )}
-                </div>
-              ))}
+              <p className="text-white/40 text-sm mb-1">{search ? "No boards match your search" : "No boards yet"}</p>
+              {!search && <p className="text-white/20 text-xs">Create your first board to get started</p>}
             </div>
           )}
-        </main>
-      </div>
 
-      {/* Close dropdown on outside click */}
-      {openMenu && (
-        <div className="fixed inset-0 z-10" onClick={() => setOpenMenu(null)} />
-      )}
+          {/* Pinned section */}
+          {pinned.length > 0 && (
+            <section>
+              <div className="flex items-center gap-2 mb-4">
+                <Pin className="w-3.5 h-3.5 text-amber-400" />
+                <h2 className="text-xs font-semibold uppercase tracking-widest text-white/30">Pinned</h2>
+              </div>
+              <BoardGrid boards={pinned} onOpen={(b) => router.push(`/canvas?board=${b.id}`)} onRename={(b) => { setRenamingId(b.id); setRenameValue(b.name); }} renamingId={renamingId} renameValue={renameValue} setRenameValue={setRenameValue} onRenameSubmit={renameBoard} onDelete={deleteBoard} onTogglePin={togglePin} onDuplicate={duplicateBoard} openMenu={openMenu} setOpenMenu={setOpenMenu} duplicating={duplicating} />
+            </section>
+          )}
+
+          {/* All boards */}
+          {unpinned.length > 0 && (
+            <section>
+              {pinned.length > 0 && (
+                <div className="flex items-center gap-2 mb-4">
+                  <h2 className="text-xs font-semibold uppercase tracking-widest text-white/30">All Boards</h2>
+                </div>
+              )}
+              <BoardGrid boards={unpinned} onOpen={(b) => router.push(`/canvas?board=${b.id}`)} onRename={(b) => { setRenamingId(b.id); setRenameValue(b.name); }} renamingId={renamingId} renameValue={renameValue} setRenameValue={setRenameValue} onRenameSubmit={renameBoard} onDelete={deleteBoard} onTogglePin={togglePin} onDuplicate={duplicateBoard} openMenu={openMenu} setOpenMenu={setOpenMenu} duplicating={duplicating} />
+            </section>
+          )}
+        </div>
+      </main>
     </div>
+  );
+}
+
+// ── Board Grid Component ──────────────────────────────────────────────────────
+
+interface BoardGridProps {
+  boards: Board[];
+  onOpen: (b: Board) => void;
+  onRename: (b: Board) => void;
+  renamingId: string | null;
+  renameValue: string;
+  setRenameValue: (v: string) => void;
+  onRenameSubmit: (id: string, name: string) => void;
+  onDelete: (id: string) => void;
+  onTogglePin: (b: Board) => void;
+  onDuplicate: (b: Board) => void;
+  openMenu: string | null;
+  setOpenMenu: (id: string | null) => void;
+  duplicating: string | null;
+}
+
+function BoardGrid({ boards, onOpen, onRename, renamingId, renameValue, setRenameValue, onRenameSubmit, onDelete, onTogglePin, onDuplicate, openMenu, setOpenMenu, duplicating }: BoardGridProps) {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+      {boards.map((board, i) => {
+        const colorClass = BOARD_COLORS[i % BOARD_COLORS.length];
+        const isMenuOpen = openMenu === board.id;
+        const isDuplicating = duplicating === board.id;
+
+        return (
+          <div key={board.id} className="group relative rounded-2xl border border-white/8 bg-[#0d0d14] hover:border-white/15 hover:bg-[#111118] transition-all overflow-hidden">
+            {/* Preview area */}
+            <div
+              className={`h-36 bg-gradient-to-br ${colorClass} cursor-pointer relative`}
+              onClick={() => onOpen(board)}
+            >
+              {board.isPinned && (
+                <div className="absolute top-2.5 left-2.5 w-5 h-5 rounded-full bg-amber-500/20 border border-amber-500/30 flex items-center justify-center">
+                  <Pin className="w-2.5 h-2.5 text-amber-400" />
+                </div>
+              )}
+              {board.isPublic && (
+                <div className="absolute top-2.5 right-2.5 flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/20">
+                  <Globe className="w-2.5 h-2.5 text-emerald-400" />
+                  <span className="text-[9px] text-emerald-400 font-medium">Public</span>
+                </div>
+              )}
+              {/* Shape count badge */}
+              {board.shapeCount > 0 && (
+                <div className="absolute bottom-2.5 left-2.5 px-1.5 py-0.5 rounded-full bg-black/40 backdrop-blur-sm">
+                  <span className="text-[9px] text-white/60">{board.shapeCount} {board.shapeCount === 1 ? "shape" : "shapes"}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Info */}
+            <div className="p-3">
+              {renamingId === board.id ? (
+                <form onSubmit={e => { e.preventDefault(); onRenameSubmit(board.id, renameValue || board.name); }} className="flex gap-1.5">
+                  <input
+                    autoFocus
+                    value={renameValue}
+                    onChange={e => setRenameValue(e.target.value)}
+                    onBlur={() => onRenameSubmit(board.id, renameValue || board.name)}
+                    className="flex-1 text-sm text-white bg-white/8 border border-white/15 rounded-lg px-2 py-1 focus:outline-none focus:border-violet-500/50 min-w-0"
+                  />
+                </form>
+              ) : (
+                <div className="flex items-start justify-between gap-2">
+                  <button
+                    onClick={() => onOpen(board)}
+                    className="text-sm font-medium text-white hover:text-white/80 truncate text-left transition-colors flex-1 min-w-0"
+                  >
+                    {board.name}
+                  </button>
+                  {/* Context menu */}
+                  <div className="relative shrink-0">
+                    <button
+                      onClick={e => { e.stopPropagation(); setOpenMenu(isMenuOpen ? null : board.id); }}
+                      className="w-6 h-6 rounded-lg bg-white/0 hover:bg-white/8 flex items-center justify-center text-white/30 hover:text-white/70 transition-all opacity-0 group-hover:opacity-100"
+                    >
+                      <MoreHorizontal className="w-3.5 h-3.5" />
+                    </button>
+                    {isMenuOpen && (
+                      <div className="absolute right-0 top-8 z-50 w-44 rounded-xl border border-white/10 bg-[#13131a]/98 backdrop-blur-2xl shadow-2xl p-1" onClick={e => e.stopPropagation()}>
+                        <MenuItem icon={<Pencil className="w-3.5 h-3.5" />} label="Rename" onClick={() => { onRename(board); setOpenMenu(null); }} />
+                        <MenuItem icon={board.isPinned ? <PinOff className="w-3.5 h-3.5" /> : <Pin className="w-3.5 h-3.5" />} label={board.isPinned ? "Unpin" : "Pin to top"} onClick={() => onTogglePin(board)} />
+                        <MenuItem icon={isDuplicating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Copy className="w-3.5 h-3.5" />} label="Duplicate" onClick={() => onDuplicate(board)} disabled={isDuplicating} />
+                        <div className="my-1 h-px bg-white/6" />
+                        <MenuItem icon={<Trash2 className="w-3.5 h-3.5" />} label="Delete" onClick={() => onDelete(board.id)} danger />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center gap-3 mt-1.5 text-[10px] text-white/25">
+                <span className="flex items-center gap-1"><Clock className="w-2.5 h-2.5" />{formatRelative(board.updatedAt)}</span>
+                {board._count.members > 0 && (
+                  <span className="flex items-center gap-1"><Users className="w-2.5 h-2.5" />{board._count.members}</span>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function MenuItem({ icon, label, onClick, danger, disabled }: {
+  icon: React.ReactNode; label: string; onClick: () => void; danger?: boolean; disabled?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs transition-colors disabled:opacity-40 ${danger ? "text-red-400 hover:bg-red-500/10" : "text-white/60 hover:bg-white/5 hover:text-white"}`}
+    >
+      {icon}{label}
+    </button>
   );
 }
