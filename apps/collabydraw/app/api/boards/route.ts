@@ -4,7 +4,6 @@ import { authOptions } from "@/utils/auth";
 import client from "@repo/db/client";
 import { getPlanLimits } from "@/config/planLimits";
 import { fireWebhook } from "@/lib/webhooks";
-import { getPlanLimits } from "@/config/planLimits";
 
 // Plan limit check logic below
 
