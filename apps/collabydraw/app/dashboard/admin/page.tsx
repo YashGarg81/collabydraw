@@ -4,7 +4,8 @@ import { redirect } from "next/navigation";
 import client from "@repo/db/client";
 import { Users, DollarSign, Activity, CreditCard } from "lucide-react";
 import Link from "next/link";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, ShieldAlert, History, ShieldCheck } from "lucide-react";
+import { AdminUserActions } from "./AdminUserActions";
 
 export default async function AdminDashboard() {
   const session = await getServerSession(authOptions);
@@ -46,8 +47,14 @@ export default async function AdminDashboard() {
 
   const recentUsers = await client.user.findMany({
     orderBy: { createdAt: "desc" },
+    take: 20,
+    select: { id: true, name: true, email: true, plan: true, aiCredits: true, createdAt: true, isBanned: true },
+  });
+
+  const recentLogs = await client.auditLog.findMany({
+    orderBy: { createdAt: "desc" },
     take: 10,
-    select: { id: true, name: true, email: true, plan: true, aiCredits: true, createdAt: true },
+    include: { user: { select: { email: true } } }
   });
 
   const activeSubscriptions = await client.subscription.count({
@@ -89,12 +96,19 @@ export default async function AdminDashboard() {
                   <th className="px-6 py-4 font-medium">Plan</th>
                   <th className="px-6 py-4 font-medium">AI Credits</th>
                   <th className="px-6 py-4 font-medium">Joined</th>
+                  <th className="px-6 py-4 font-medium">Status</th>
+                  <th className="px-6 py-4 font-medium text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
                 {recentUsers.map((u) => (
-                  <tr key={u.id} className="hover:bg-white/[0.02] transition-colors">
-                    <td className="px-6 py-4 font-medium text-white">{u.name || "Anonymous"}</td>
+                  <tr key={u.id} className={`hover:bg-white/[0.02] transition-colors ${u.isBanned ? 'opacity-50' : ''}`}>
+                    <td className="px-6 py-4 font-medium text-white">
+                      <div className="flex items-center gap-2">
+                        {u.name || "Anonymous"}
+                        {u.id === session.user.id && <span className="text-[8px] bg-white/10 px-1 rounded text-white/40">YOU</span>}
+                      </div>
+                    </td>
                     <td className="px-6 py-4 text-white/60">{u.email}</td>
                     <td className="px-6 py-4">
                       <span className={`px-2 py-1 rounded-full text-[10px] font-bold ${u.plan === 'PRO' ? 'bg-violet-500/20 text-violet-400 border border-violet-500/30' : 'bg-white/10 text-white/50 border border-white/10'}`}>
@@ -103,6 +117,16 @@ export default async function AdminDashboard() {
                     </td>
                     <td className="px-6 py-4 text-white/60">{u.aiCredits}</td>
                     <td className="px-6 py-4 text-white/60">{u.createdAt.toLocaleDateString()}</td>
+                    <td className="px-6 py-4">
+                       <span className={`px-2 py-1 rounded-full text-[10px] font-bold ${u.isBanned ? 'bg-red-500/20 text-red-400' : 'bg-emerald-500/20 text-emerald-400'}`}>
+                        {u.isBanned ? 'BANNED' : 'ACTIVE'}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                      {u.id !== session.user.id && (
+                        <AdminUserActions userId={u.id} isBanned={u.isBanned} />
+                      )}
+                    </td>
                   </tr>
                 ))}
                 {recentUsers.length === 0 && (
@@ -115,6 +139,28 @@ export default async function AdminDashboard() {
           </div>
         </section>
 
+        {/* Audit Logs */}
+        <section className="rounded-3xl border border-white/10 bg-white/[0.02] overflow-hidden">
+          <div className="p-6 border-b border-white/5 flex items-center justify-between">
+            <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+              <History className="w-5 h-5 text-white/40" />
+              Audit Logs
+            </h2>
+          </div>
+          <div className="p-6 space-y-4">
+            {recentLogs.map((log) => (
+              <div key={log.id} className="flex items-center justify-between text-xs border-b border-white/5 pb-2 last:border-0">
+                <div className="flex items-center gap-4">
+                  <span className="text-white/40 w-32">{new Date(log.createdAt).toLocaleString()}</span>
+                  <span className="font-mono text-violet-400">{log.action}</span>
+                  <span className="text-white/60">by {log.user.email}</span>
+                </div>
+                <div className="text-white/30 truncate max-w-xs">{log.metadata}</div>
+              </div>
+            ))}
+            {recentLogs.length === 0 && <p className="text-center text-white/30 py-4 text-xs">No audit logs found.</p>}
+          </div>
+        </section>
       </main>
     </div>
   );

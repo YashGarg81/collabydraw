@@ -16,6 +16,7 @@ import { WebSocketMessage, WsDataType } from "@repo/common/types";
 import { WebSocketServer, WebSocket } from "ws";
 import jwt, { JwtPayload } from "jsonwebtoken";
 import Redis from "ioredis";
+import { canAccessBoard, SessionUser } from "@repo/db/client";
 
 if (!process.env.JWT_SECRET) {
   throw new Error("JWT_SECRET is ABSOLUTELY REQUIRED and not set");
@@ -56,6 +57,7 @@ async function initRedis() {
 type Connection = {
   connectionId: string;
   userId: string;
+  user: SessionUser;
   userName: string;
   ws: WebSocket;
   rooms: Set<string>;
@@ -72,10 +74,11 @@ const subscribedChannels = new Set<string>();
 function channelFor(roomId: string) { return `room:${roomId}`; }
 function shapesKeyFor(roomId: string) { return `shapes:${roomId}`; }
 
-function authUser(token: string): string | null {
+function authUser(token: string): SessionUser | null {
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
-    return typeof decoded === "string" || !decoded.id ? null : decoded.id;
+    const decoded = jwt.verify(token, JWT_SECRET) as SessionUser;
+    if (!decoded.id || decoded.isBanned) return null;
+    return decoded;
   } catch {
     return null;
   }
@@ -232,11 +235,11 @@ wss.on("connection", function connection(ws, req) {
   const token = queryParams.get("token");
   if (!token) { ws.close(1008, "User not authenticated"); return; }
 
-  const userId = authUser(token);
-  if (!userId) { ws.close(1008, "User not authenticated"); return; }
+  const user = authUser(token);
+  if (!user) { ws.close(1008, "User not authenticated or banned"); return; }
 
   const connectionId = generateConnectionId();
-  const conn: Connection = { connectionId, userId, userName: userId, ws, rooms: new Set() };
+  const conn: Connection = { connectionId, userId: user.id, user, userName: user.email, ws, rooms: new Set() };
   connections.set(connectionId, conn);
 
   ws.send(JSON.stringify({ type: WsDataType.CONNECTION_READY, connectionId }));
@@ -261,7 +264,15 @@ wss.on("connection", function connection(ws, req) {
         // ── JOIN ──────────────────────────────────────────────────────
         case WsDataType.JOIN: {
           const room = await client.room.findUnique({ where: { id: msg.roomId } });
-          if (!room) { ws.close(); return; }
+          if (!room || !room.boardId) { ws.close(); return; }
+
+          // Phase 3.5: Validate RBAC
+          const hasAccess = await canAccessBoard(connection.user, room.boardId, "VIEWER");
+          if (!hasAccess) {
+            console.warn(`🚫 Access Denied for user ${connection.userId} to room ${msg.roomId}`);
+            ws.send(JSON.stringify({ type: "ERROR", message: "Forbidden: No board access" }));
+            return;
+          }
 
           connection.rooms.add(msg.roomId);
           await ensureSubscribed(msg.roomId);

@@ -45,7 +45,17 @@ export const authOptions: NextAuthOptions = {
           throw new Error("Incorrect password");
         }
 
-        return { id: user.id, email: user.email, name: user.name };
+        if (user.isBanned) {
+          throw new Error("ACCOUNT_BANNED");
+        }
+
+        // Update last login
+        await client.user.update({
+          where: { id: user.id },
+          data: { lastLogin: new Date() }
+        });
+
+        return { id: user.id, email: user.email, name: user.name, role: user.role, isBanned: user.isBanned };
       },
     }),
 
@@ -73,26 +83,48 @@ export const authOptions: NextAuthOptions = {
   ],
 
   callbacks: {
+    async signIn({ user, account, profile }) {
+      if (account?.provider !== "credentials" && user?.email) {
+        // Find existing user to check ban status and update lastLogin
+        const dbUser = await client.user.findUnique({ where: { email: user.email } });
+        if (dbUser) {
+          if (dbUser.isBanned) {
+            return false; // Blocks sign in
+          }
+          await client.user.update({
+            where: { id: dbUser.id },
+            data: { lastLogin: new Date() }
+          });
+        }
+      }
+      return true;
+    },
     async jwt({ token, user, account }) {
-      // On OAuth sign-in, persist user id from DB lookup
-      if (account && account.provider !== "credentials" && user?.email) {
+      // On OAuth sign-in or Credentials sign-in
+      if (user?.email) {
         const dbUser = await client.user.findUnique({
           where: { email: user.email },
         });
         if (dbUser) {
           token.id = dbUser.id;
           token.email = dbUser.email;
+          token.role = dbUser.role;
+          token.isBanned = dbUser.isBanned;
         }
       }
-      if (user) {
-        token.id = user.id;
-        token.email = user.email ?? token.email;
-      }
+
       if (!process.env.JWT_SECRET) {
         throw new Error("JWT_SECRET is required");
       }
+      
+      // The JWT token exposed to the client and WS
       token.accessToken = jwt.sign(
-        { id: token.id, email: token.email },
+        { 
+          id: token.id, 
+          email: token.email,
+          role: token.role,
+          isBanned: token.isBanned
+        },
         process.env.JWT_SECRET,
         { expiresIn: "7d" }
       );
@@ -102,6 +134,8 @@ export const authOptions: NextAuthOptions = {
       if (token && session.user) {
         session.user.id = token.id as string;
         session.user.email = token.email as string;
+        session.user.role = token.role as string;
+        session.user.isBanned = token.isBanned as boolean;
         session.accessToken = token.accessToken as string;
       }
       return session;

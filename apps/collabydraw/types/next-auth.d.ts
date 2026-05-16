@@ -6,6 +6,8 @@ declare module "next-auth" {
             id: string;
             email: string;
             name?: string;
+            role: string;
+            isBanned: boolean;
         }
         accessToken: string;
     }
@@ -16,5 +18,7 @@ declare module "next-auth/jwt" {
         id: string;
         email: string;
         accessToken: string;
+        role: string;
+        isBanned: boolean;
     }
 }

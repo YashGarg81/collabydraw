@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/utils/auth";
-import client from "@repo/db/client";
+import client, { canAccessBoard } from "@repo/db/client";
 import { fireWebhook } from "../../../../lib/webhooks";
 
 type Params = { params: Promise<{ id: string }> };
@@ -14,19 +14,23 @@ export async function GET(_req: NextRequest, { params }: Params) {
   }
 
   const { id } = await params;
+  
+  // Phase 3.5: Centralized RBAC
+  const hasAccess = await canAccessBoard(session.user, id, "VIEWER");
+  if (!hasAccess) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
   const board = await client.board.findUnique({
     where: { id },
-    include: { members: { include: { user: { select: { id: true, name: true, image: true } } } } },
+    include: { 
+      members: { include: { user: { select: { id: true, name: true, image: true } } } },
+      workspace: true
+    },
   });
 
   if (!board) return NextResponse.json({ error: "Board not found" }, { status: 404 });
 
-  const isOwner = board.ownerId === session.user.id;
-  const member = board.members.find((m) => m.userId === session.user.id);
-  const isMember = !!member;
-  if (!isOwner && !isMember && !board.isPublic) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
 
   let role = "VIEWER";
   if (isOwner) role = "OWNER";
@@ -44,9 +48,16 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   }
 
   const { id } = await params;
-  const board = await client.board.findUnique({ where: { id } });
-  if (!board || board.ownerId !== session.user.id) {
+  
+  // Phase 3.5: RBAC - Requires EDITOR access
+  const hasAccess = await canAccessBoard(session.user, id, "EDITOR");
+  if (!hasAccess) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  const board = await client.board.findUnique({ where: { id } });
+  if (!board) {
+    return NextResponse.json({ error: "Board not found" }, { status: 404 });
   }
 
   const body = await req.json().catch(() => ({}));
@@ -78,9 +89,16 @@ export async function DELETE(_req: NextRequest, { params }: Params) {
   }
 
   const { id } = await params;
-  const board = await client.board.findUnique({ where: { id } });
-  if (!board || board.ownerId !== session.user.id) {
+
+  // Phase 3.5: RBAC - Requires EDITOR access for deletion (or check if user can manage workspace)
+  const hasAccess = await canAccessBoard(session.user, id, "EDITOR");
+  if (!hasAccess) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  const board = await client.board.findUnique({ where: { id } });
+  if (!board) {
+    return NextResponse.json({ error: "Board not found" }, { status: 404 });
   }
 
   await client.board.delete({ where: { id } });
