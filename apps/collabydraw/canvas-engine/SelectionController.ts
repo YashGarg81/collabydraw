@@ -1,5 +1,9 @@
 import { Shape } from "@/types/canvas";
 import { getFontSize } from "@/utils/textUtils";
+import { TransformEngine } from "./TransformEngine";
+import { SnapEngine } from "./SnapEngine";
+import { SpatialIndex } from "./SpatialIndex";
+
 
 type Tool = Shape;
 
@@ -7,7 +11,7 @@ export interface ResizeHandle {
   x: number;
   y: number;
   cursor: string;
-  position: "top-left" | "top-right" | "bottom-left" | "bottom-right";
+  position: "top-left" | "top-right" | "bottom-left" | "bottom-right" | "rotation";
 }
 
 export interface Bounds {
@@ -32,8 +36,10 @@ export class SelectionController {
 
   private ctx: CanvasRenderingContext2D;
   public isSnapToGrid: boolean = false;
-  public isSmartSnapping: boolean = true; // Smart object-to-object snapping
+  public isSmartSnapping: boolean = true;
   public activeSnapLines: { x?: number; y?: number }[] = [];
+  public snapEngine: SnapEngine = new SnapEngine();
+  public spatialIndex: SpatialIndex | null = null;
 
   private getSnappedPoint(val: number): number {
     return this.isSnapToGrid ? Math.round(val / 20) * 20 : val;
@@ -240,13 +246,17 @@ export class SelectionController {
     };
   }
 
-  private getResizeHandles(bounds: Bounds): ResizeHandle[] {
-    return [
+  private getResizeHandles(bounds: Bounds, shape?: Tool): ResizeHandle[] {
+    const handles: ResizeHandle[] = [
       { x: bounds.x, y: bounds.y, cursor: "nw-resize", position: "top-left" },
       { x: bounds.x + bounds.width, y: bounds.y, cursor: "ne-resize", position: "top-right" },
       { x: bounds.x, y: bounds.y + bounds.height, cursor: "sw-resize", position: "bottom-left" },
       { x: bounds.x + bounds.width, y: bounds.y + bounds.height, cursor: "se-resize", position: "bottom-right" },
     ];
+    if (shape) {
+      handles.push({ x: bounds.x + bounds.width / 2, y: bounds.y - 30, cursor: "crosshair", position: "rotation" });
+    }
+    return handles;
   }
 
   drawSelectionBox() {
@@ -254,6 +264,11 @@ export class SelectionController {
     if (!bounds) return;
 
     this.ctx.save();
+
+    const isSingleShape = this.selectedShapes.length === 1;
+    if (isSingleShape) {
+      TransformEngine.applyTransform(this.ctx, this.selectedShapes[0]);
+    }
 
     const borderColor = "#6965db";
     const handleBorderColor = "#6965db";
@@ -266,18 +281,25 @@ export class SelectionController {
     this.ctx.beginPath();
     this.ctx.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
 
-    const handles = this.getResizeHandles(bounds);
+    const handles = this.getResizeHandles(bounds, isSingleShape ? this.selectedShapes[0] : undefined);
     handles.forEach((handle) => {
       this.ctx.beginPath();
       this.ctx.fillStyle = handleFillColor;
       this.ctx.strokeStyle = handleBorderColor;
-      this.ctx.roundRect(
-        handle.x - handleSize / 2,
-        handle.y - handleSize / 2,
-        handleSize,
-        handleSize,
-        3
-      );
+      
+      if (handle.position === "rotation") {
+        this.ctx.arc(handle.x, handle.y, handleSize / 2, 0, Math.PI * 2);
+        this.ctx.moveTo(handle.x, handle.y + handleSize / 2);
+        this.ctx.lineTo(handle.x, bounds.y);
+      } else {
+        this.ctx.roundRect(
+          handle.x - handleSize / 2,
+          handle.y - handleSize / 2,
+          handleSize,
+          handleSize,
+          3
+        );
+      }
       this.ctx.fill();
       this.ctx.stroke();
     });
@@ -303,12 +325,13 @@ export class SelectionController {
 
 
   isPointInShape(x: number, y: number, shape: Tool): boolean {
+    const local = TransformEngine.worldToLocal({ x, y }, shape);
     const bounds = this.getShapeBounds(shape);
     return (
-      x >= bounds.x &&
-      x <= bounds.x + bounds.width &&
-      y >= bounds.y &&
-      y <= bounds.y + bounds.height
+      local.x >= bounds.x &&
+      local.x <= bounds.x + bounds.width &&
+      local.y >= bounds.y &&
+      local.y <= bounds.y + bounds.height
     );
   }
 
@@ -327,13 +350,18 @@ export class SelectionController {
     const bounds = this.getCombinedBounds();
     if (!bounds) return null;
     
-    const handles = this.getResizeHandles(bounds);
+    const isSingleShape = this.selectedShapes.length === 1;
+    const localPoint = isSingleShape 
+      ? TransformEngine.worldToLocal({ x, y }, this.selectedShapes[0]) 
+      : { x, y };
+    
+    const handles = this.getResizeHandles(bounds, isSingleShape ? this.selectedShapes[0] : undefined);
     const handleRadius = 5;
 
     return (
       handles.find((handle) => {
-        const dx = x - handle.x;
-        const dy = y - handle.y;
+        const dx = localPoint.x - handle.x;
+        const dy = localPoint.y - handle.y;
         return dx * dx + dy * dy <= handleRadius * handleRadius;
       }) || null
     );
@@ -377,72 +405,25 @@ export class SelectionController {
     if (this.isDragging && this.selectedShapes.length > 0) {
       const bounds = this.getCombinedBounds()!;
       
-      let targetX = this.getSnappedPoint(x - this.dragOffset.x);
-      let targetY = this.getSnappedPoint(y - this.dragOffset.y);
+      let targetX = x - this.dragOffset.x;
+      let targetY = y - this.dragOffset.y;
       
       this.activeSnapLines = [];
 
-      // Smart object-to-object snapping
-      if (this.isSmartSnapping && existingShapes && !this.isSnapToGrid) {
-          const threshold = 5;
-          let minSnapDx = threshold + 1;
-          let minSnapDy = threshold + 1;
-          let snappedXLine: number | undefined;
-          let snappedYLine: number | undefined;
-          
-          const draggedCenter = { x: targetX + bounds.width / 2, y: targetY + bounds.height / 2 };
-          const draggedRight = targetX + bounds.width;
-          const draggedBottom = targetY + bounds.height;
-
-          const nonSelectedShapes = existingShapes.filter(s => !this.selectedShapes.find(sel => sel.id === s.id));
-
-          for (const shape of nonSelectedShapes) {
-              const sBounds = this.getShapeBounds(shape);
-              if (sBounds.width === 0 && sBounds.height === 0) continue;
-
-              const sCenter = { x: sBounds.x + sBounds.width / 2, y: sBounds.y + sBounds.height / 2 };
-              const sRight = sBounds.x + sBounds.width;
-              const sBottom = sBounds.y + sBounds.height;
-
-              // Check X-axis snapping
-              const xPoints = [
-                  { t: targetX, s: sBounds.x, line: sBounds.x, offset: 0 },
-                  { t: targetX, s: sRight, line: sRight, offset: 0 },
-                  { t: draggedRight, s: sBounds.x, line: sBounds.x, offset: -bounds.width },
-                  { t: draggedRight, s: sRight, line: sRight, offset: -bounds.width },
-                  { t: draggedCenter.x, s: sCenter.x, line: sCenter.x, offset: -bounds.width / 2 }
-              ];
-
-              for (const pt of xPoints) {
-                  const dist = Math.abs(pt.t - pt.s);
-                  if (dist < threshold && dist < minSnapDx) {
-                      minSnapDx = dist;
-                      targetX = pt.s + pt.offset;
-                      snappedXLine = pt.line;
-                  }
-              }
-
-              // Check Y-axis snapping
-              const yPoints = [
-                  { t: targetY, s: sBounds.y, line: sBounds.y, offset: 0 },
-                  { t: targetY, s: sBottom, line: sBottom, offset: 0 },
-                  { t: draggedBottom, s: sBounds.y, line: sBounds.y, offset: -bounds.height },
-                  { t: draggedBottom, s: sBottom, line: sBottom, offset: -bounds.height },
-                  { t: draggedCenter.y, s: sCenter.y, line: sCenter.y, offset: -bounds.height / 2 }
-              ];
-
-              for (const pt of yPoints) {
-                  const dist = Math.abs(pt.t - pt.s);
-                  if (dist < threshold && dist < minSnapDy) {
-                      minSnapDy = dist;
-                      targetY = pt.s + pt.offset;
-                      snappedYLine = pt.line;
-                  }
-              }
-          }
-          
-          if (snappedXLine !== undefined) this.activeSnapLines.push({ x: snappedXLine });
-          if (snappedYLine !== undefined) this.activeSnapLines.push({ y: snappedYLine });
+      // Grid snap (fast, O(1))
+      if (this.isSnapToGrid) {
+        targetX = this.snapEngine.snapToGrid(targetX);
+        targetY = this.snapEngine.snapToGrid(targetY);
+      } else if (this.isSmartSnapping && this.spatialIndex) {
+        // Phase 4: Spatial-index-backed smart snap (O(log n) — NOT O(n))
+        const viewportBounds = { minX: bounds.x - 300, minY: bounds.y - 300, maxX: bounds.x + bounds.width + 300, maxY: bounds.y + bounds.height + 300 };
+        const snapResult = this.snapEngine.snapDraggedBounds(
+          targetX, targetY, bounds.width, bounds.height,
+          this.spatialIndex, this.selectedShapes, viewportBounds
+        );
+        targetX = snapResult.x;
+        targetY = snapResult.y;
+        this.activeSnapLines = snapResult.snapLines;
       }
 
       const dx = targetX - bounds.x;

@@ -119,7 +119,11 @@ export const canvasBgDark: ReadonlyArray<string> = [
 export type DEFAULT_CANVAS_BACKGROUND_LIGHT = (typeof canvasBgLight)[number];
 export type DEFAULT_CANVAS_BACKGROUND_DARK = (typeof canvasBgDark)[number];
 export const LOCALSTORAGE_CANVAS_KEY = "standalone_canvas_shapes";
-export type BaseShape = { groupId?: string };
+export type BaseShape = { 
+  groupId?: string;
+  rotation?: number; // radians
+  transformOrigin?: Point; // Relative center [0, 1] - usually {x: 0.5, y: 0.5}
+};
 export type Shape = BaseShape & (
   | {
       id: string | null;

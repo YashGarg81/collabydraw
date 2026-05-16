@@ -49,6 +49,12 @@ import { generateFreeDrawPath } from "../shape-render/RenderElements";
 import { roundRect } from "@/shape-render/roundRect";
 import { getClientColor } from "@/utils/getClientColor";
 import { getStreamKey } from "@/utils/getStreamKey";
+import { SpatialIndex } from "./SpatialIndex";
+import { TransformEngine } from "./TransformEngine";
+import { GroupManager, GroupDescriptor } from "./GroupManager";
+import { SnapEngine } from "./SnapEngine";
+import { CommandManager, AddShapeCommand, RemoveShapeCommand, UpdateShapeCommand, BatchCommand } from "./CommandManager";
+import { LayerManager, Layer } from "./LayerManager";
 
 type WebSocketConnection = {
   connectionId: string;
@@ -114,6 +120,13 @@ export class CanvasEngine {
   private marqueeCurrentY: number = 0;
   
   private SelectionController: SelectionController;
+  private cachedShapes: Shape[] = [];
+  private spatialIndex: SpatialIndex = new SpatialIndex();
+  private groupManager: GroupManager = new GroupManager();
+  private snapEngine: SnapEngine = new SnapEngine();
+  private commandManager!: CommandManager;  // Phase 5
+  private layerManager!: LayerManager;      // Phase 6
+  private yGroups!: Y.Map<GroupDescriptor>;
 
   public isSnapToGrid: boolean = false;
   
@@ -142,6 +155,20 @@ export class CanvasEngine {
   public setSnapToGrid(snap: boolean) {
     this.isSnapToGrid = snap;
     this.SelectionController.isSnapToGrid = snap;
+    this.snapEngine.config.gridEnabled = snap;
+  }
+
+  public setSmartSnapping(enabled: boolean) {
+    this.SelectionController.isSmartSnapping = enabled;
+    this.snapEngine.config.enabled = enabled;
+  }
+
+  public setGridSize(size: number) {
+    this.snapEngine.config.gridSize = size;
+  }
+
+  public get snapConfig() {
+    return this.snapEngine.config;
   }
 
   public setOnSelectionChange(cb: (isSelected: boolean, count?: number, isGrouped?: boolean) => void) {
@@ -226,6 +253,8 @@ export class CanvasEngine {
     this.onParticipantsUpdate = onParticipantsUpdate;
     this.onConnectionChange = onConnectionChange;
     this.SelectionController = new SelectionController(this.ctx, canvas);
+    // Phase 4: Share the spatial index so SelectionController uses O(log n) snapping
+    this.SelectionController.spatialIndex = this.spatialIndex;
 
     this.encryptionKey = encryptionKey;
 
@@ -234,11 +263,28 @@ export class CanvasEngine {
     this.yDoc = new Y.Doc();
     this.yShapes = this.yDoc.getMap<Shape>("shapes");
     this.yOrder = this.yDoc.getArray<string>("shapeOrder");
+    this.yGroups = this.yDoc.getMap<GroupDescriptor>("groups"); // Phase 3: group descriptors
     this.yUndoManager = new Y.UndoManager([this.yShapes, this.yOrder]);
+
+    // Phase 5: CommandManager — local-origin only, multiplayer-safe
+    this.commandManager = new CommandManager(
+      this.yShapes, this.yOrder, this.yDoc,
+      this.connectionId || "local"
+    );
+    this.commandManager.onChange = (canUndo, canRedo) => {
+      this.onHistoryChange?.(canUndo, canRedo);
+    };
+
+    // Phase 6: LayerManager — Yjs-synced layer hierarchy
+    this.layerManager = new LayerManager(this.yDoc, this.connectionId || "local");
+    this.layerManager.onChange = (layers) => {
+      this.clearCanvas();
+    };
 
     // Observers for sync and undo/redo re-renders
     this.yShapes.observe(() => this.rebuildFromYjs());
     this.yOrder.observe(() => this.rebuildFromYjs());
+    this.yGroups.observe(() => this.rebuildGroupDescriptors());
     this.yUndoManager.on("stack-item-added", () => {
       this.rebuildFromYjs();
     });
@@ -820,7 +866,29 @@ export class CanvasEngine {
       this.canvas.height / this.scale
     );
 
-    this.existingShapes.map((shape: Shape) => {
+    // Phase 4: Draw grid if enabled
+    if (this.snapEngine.config.gridEnabled) {
+      this.snapEngine.drawGrid(
+        this.ctx,
+        this.panX, this.panY, this.scale,
+        this.canvas.width, this.canvas.height,
+        this.currentTheme === "dark"
+      );
+    }
+
+    const viewportBounds = {
+      minX: -this.panX / this.scale,
+      minY: -this.panY / this.scale,
+      maxX: (-this.panX + this.canvas.width) / this.scale,
+      maxY: (-this.panY + this.canvas.height) / this.scale,
+    };
+
+    const shapesToRender = this.spatialIndex.getVisibleShapes(viewportBounds);
+
+    // Phase 6: Apply layer filtering + sort before rendering
+    const layerSorted = this.layerManager.filterAndSort(shapesToRender);
+
+    layerSorted.forEach((shape: Shape) => {
       const isBeingStreamed = [...this.remoteStreamingShapes.values()].some(
         (streamingShape) => streamingShape.id === shape.id
       );
@@ -828,6 +896,10 @@ export class CanvasEngine {
       if (isBeingStreamed) {
         return;
       }
+      
+      this.ctx.save();
+      TransformEngine.applyTransform(this.ctx, shape);
+
       if (shape.type === "rectangle") {
         this.drawRect(
           shape.x,
@@ -973,6 +1045,8 @@ export class CanvasEngine {
         );
         this.ctx.restore();
       }
+
+      this.ctx.restore();
     });
 
     if (this.activeTextarea && this.activeTextPosition) {
@@ -1433,20 +1507,24 @@ mouseDownHandler = (e: MouseEvent) => {
     for (let i = this.existingShapes.length - 1; i >= 0; i--) {
       const shape = this.existingShapes[i];
 
+      // Phase 6: Skip shapes on locked layers
+      if (this.layerManager.isShapeLocked(shape)) continue;
+
       if (this.SelectionController.isPointInShape(x, y, shape)) {
         found = true;
-        const groupMembers = shape.groupId ? this.existingShapes.filter(s => s.groupId === shape.groupId) : [shape];
+        // Phase 3: resolve to group root via GroupManager
+        const resolved = this.groupManager.resolveSelection(shape, this.existingShapes);
         
         if (e.shiftKey) {
             const isSelected = this.SelectionController.getSelectedShapes().find(s => s.id === shape.id);
             if (isSelected) {
-                const newSelection = this.SelectionController.getSelectedShapes().filter(s => !groupMembers.find(g => g.id === s.id));
+                const newSelection = this.SelectionController.getSelectedShapes().filter(s => !resolved.find(g => g.id === s.id));
                 this.SelectionController.setSelectedShapes(newSelection);
             } else {
-                this.SelectionController.setSelectedShapes([...this.SelectionController.getSelectedShapes(), ...groupMembers]);
+                this.SelectionController.setSelectedShapes([...this.SelectionController.getSelectedShapes(), ...resolved]);
             }
         } else if (!this.SelectionController.getSelectedShapes().find(s => s.id === shape.id)) {
-            this.SelectionController.setSelectedShapes(groupMembers);
+            this.SelectionController.setSelectedShapes(resolved);
         }
         
         this.saveState();
@@ -3787,25 +3865,45 @@ public groupSelected() {
     const selectedShapes = this.SelectionController.getSelectedShapes();
     if (selectedShapes.length < 2) return;
     
-    this.saveState();
-    const groupId = Math.random().toString(36).substring(2, 15);
-    selectedShapes.forEach(shape => {
-        shape.groupId = groupId;
-    });
-    this.syncAllShapes();
+    const groupId = `group_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+    const bounds = this.groupManager.getGroupBounds(groupId, this.existingShapes);
+    
+    // Batch all mutations in a single Yjs transaction for multiplayer safety
+    this.yDoc.transact(() => {
+      // Assign groupId to all member shapes in the CRDT
+      selectedShapes.forEach(shape => {
+        if (shape.id) {
+          const updated = { ...shape, groupId };
+          this.yShapes.set(shape.id, updated);
+        }
+      });
+      
+      // Persist group descriptor in its own Y.Map for deterministic sync
+      const center = bounds
+        ? { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 }
+        : { x: 0, y: 0 };
+      this.yGroups.set(groupId, { groupId, centerX: center.x, centerY: center.y, rotation: 0 });
+    }, this.connectionId || "local");
 }
 
 public ungroupSelected() {
     const selectedShapes = this.SelectionController.getSelectedShapes();
     if (selectedShapes.length === 0) return;
     
-    if (!selectedShapes.some(s => s.groupId)) return;
+    const groupIds = new Set(selectedShapes.map(s => s.groupId).filter(Boolean) as string[]);
+    if (groupIds.size === 0) return;
     
-    this.saveState();
-    selectedShapes.forEach(shape => {
-        delete shape.groupId;
-    });
-    this.syncAllShapes();
+    // Batch all mutations in a single Yjs transaction for multiplayer safety
+    this.yDoc.transact(() => {
+      selectedShapes.forEach(shape => {
+        if (shape.id) {
+          const { groupId: _removed, ...rest } = shape as any;
+          this.yShapes.set(shape.id, rest as Shape);
+        }
+      });
+      // Remove all group descriptors for ungrouped groupIds
+      groupIds.forEach(gid => this.yGroups.delete(gid));
+    }, this.connectionId || "local");
 }
 
   private saveUndoState() {
@@ -4095,6 +4193,8 @@ public ungroupSelected() {
   }
 
   private rebuildFromYjs() {
+    this.cachedShapes = this.yOrder.toArray().map(id => this.yShapes.get(id)).filter(Boolean) as Shape[];
+    this.spatialIndex.updateIndex(this.cachedShapes);
     this.clearCanvas();
     this.notifyShapeCountChange();
     this.onHistoryChange?.(
@@ -4103,8 +4203,75 @@ public ungroupSelected() {
     );
   }
 
+  /** Sync GroupManager descriptors from Yjs (called on yGroups.observe) */
+  private rebuildGroupDescriptors() {
+    this.yGroups.forEach((descriptor, groupId) => {
+      this.groupManager.setDescriptor(descriptor);
+    });
+    // Remove any locally cached descriptors no longer in Yjs
+    this.groupManager.allDescriptors().forEach(desc => {
+      if (!this.yGroups.has(desc.groupId)) {
+        this.groupManager.removeDescriptor(desc.groupId);
+      }
+    });
+  }
+
+  /**
+   * Phase 3: Apply a group rotation via GroupManager.
+   * Wraps all mutations in a single Yjs transaction for CRDT safety.
+   */
+  public rotateGroup(groupId: string, deltaAngle: number) {
+    const members = this.groupManager.getMembersOf(groupId, this.cachedShapes);
+    if (members.length === 0) return;
+    this.groupManager.applyGroupRotation(groupId, this.cachedShapes, deltaAngle);
+    this.yDoc.transact(() => {
+      members.forEach(shape => {
+        if (shape.id) this.yShapes.set(shape.id, shape);
+      });
+      const desc = this.groupManager.getDescriptor(groupId);
+      if (desc) this.yGroups.set(groupId, desc);
+    }, this.connectionId || "local");
+  }
+
+  // ─────────────────────────────────────────────
+  // Phase 5: Command-pattern undo/redo
+  // ─────────────────────────────────────────────
+
+  /** Execute a typed Command through the CommandManager (tracked for undo/redo) */
+  public executeCommand(cmd: import("./CommandManager").Command) {
+    this.commandManager.execute(cmd);
+  }
+
+  public get commandUndoLabel() { return this.commandManager.undoLabel; }
+  public get commandRedoLabel() { return this.commandManager.redoLabel; }
+
+  // ─────────────────────────────────────────────
+  // Phase 6: Layer management public API
+  // ─────────────────────────────────────────────
+
+  public getLayers() { return this.layerManager.getLayers(); }
+  public createLayer(name: string) { return this.layerManager.createLayer(name); }
+  public renameLayer(id: string, name: string) { this.layerManager.renameLayer(id, name); }
+  public toggleLayerVisibility(id: string) { this.layerManager.toggleVisibility(id); this.clearCanvas(); }
+  public toggleLayerLock(id: string) { this.layerManager.toggleLock(id); }
+  public deleteLayer(id: string) {
+    this.layerManager.deleteLayer(id, this.cachedShapes, (shape) => {
+      if (shape.id) this.yShapes.set(shape.id, shape);
+    });
+  }
+  public moveShapeToLayer(shapeId: string, layerId: string) {
+    const shape = this.cachedShapes.find(s => s.id === shapeId);
+    if (!shape) return;
+    this.layerManager.moveShapeToLayer(shape, layerId, (s) => {
+      if (s.id) this.yShapes.set(s.id, s);
+    });
+  }
+  public setLayerChangeCallback(cb: (layers: import("./LayerManager").Layer[]) => void) {
+    this.layerManager.onChange = cb;
+  }
+
   public get existingShapes(): Shape[] {
-    return this.yOrder.toArray().map(id => this.yShapes.get(id)).filter(Boolean) as Shape[];
+    return this.cachedShapes;
   }
 
   private _addShapeToCRDT(shape: Shape) {
