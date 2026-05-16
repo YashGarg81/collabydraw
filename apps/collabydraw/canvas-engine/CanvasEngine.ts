@@ -230,15 +230,15 @@ export class CanvasEngine {
     this.encryptionKey = encryptionKey;
 
     this.clicked = false;
-    this.existingShapes = [];
-    
     // Initialize Yjs
     this.yDoc = new Y.Doc();
     this.yShapes = this.yDoc.getMap<Shape>("shapes");
     this.yOrder = this.yDoc.getArray<string>("shapeOrder");
     this.yUndoManager = new Y.UndoManager([this.yShapes, this.yOrder]);
 
-    // Observer for undo/redo re-renders
+    // Observers for sync and undo/redo re-renders
+    this.yShapes.observe(() => this.rebuildFromYjs());
+    this.yOrder.observe(() => this.rebuildFromYjs());
     this.yUndoManager.on("stack-item-added", () => {
       this.rebuildFromYjs();
     });
