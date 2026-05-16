@@ -31,6 +31,8 @@ export async function GET(_req: NextRequest, { params }: Params) {
 
   if (!board) return NextResponse.json({ error: "Board not found" }, { status: 404 });
 
+  const isOwner = board.ownerId === session.user.id;
+  const member = board.members.find(m => m.userId === session.user.id);
 
   let role = "VIEWER";
   if (isOwner) role = "OWNER";
@@ -70,6 +72,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
       ...(body.color       !== undefined && { color:       body.color }),
       ...(body.icon        !== undefined && { icon:        body.icon }),
       ...(body.shapes      !== undefined && { shapes:      JSON.stringify(body.shapes) }),
+      ...(body.encryptedData !== undefined && { encryptedData: Buffer.from(body.encryptedData, 'base64') }),
       ...(body.isPublic    !== undefined && { isPublic:    body.isPublic }),
       ...(body.publicRole  !== undefined && { publicRole:  body.publicRole }),
       ...(body.isPinned    !== undefined && { isPinned:    body.isPinned }),

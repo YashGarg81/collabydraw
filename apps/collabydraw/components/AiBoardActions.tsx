@@ -6,7 +6,7 @@
  */
 
 import React, { useState, useCallback } from "react";
-import { LayoutGrid, Layers, FileText, Loader2, CheckCircle2, AlertCircle, ChevronDown, Sparkles } from "lucide-react";
+import { LayoutGrid, Layers, FileText, Loader2, CheckCircle2, AlertCircle, ChevronDown, Sparkles, Download } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CanvasEngine } from "@/canvas-engine/CanvasEngine";
 
@@ -39,6 +39,20 @@ const ACTIONS: { id: ActionId; label: string; desc: string; icon: React.ReactNod
     icon: <FileText className="w-3.5 h-3.5" />,
     credit: true,
   },
+  {
+    id: "beautify" as any,
+    label: "Beautify Diagram",
+    desc: "Align and clean up rough sketches",
+    icon: <Sparkles className="w-3.5 h-3.5" />,
+    credit: true,
+  },
+  {
+    id: "export_svg" as any,
+    label: "Export as SVG",
+    desc: "Generate high-res vector file",
+    icon: <Download className="w-3.5 h-3.5" />,
+    credit: false,
+  },
 ];
 
 export function AiBoardActions({ engine }: AiBoardActionsProps) {
@@ -61,7 +75,8 @@ export function AiBoardActions({ engine }: AiBoardActionsProps) {
     );
 
     try {
-      const res = await fetch("/api/ai/manipulate", {
+      const endpoint = action === ("beautify" as any) ? "/api/ai/beautify" : "/api/ai/manipulate";
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action, shapes }),
@@ -76,6 +91,27 @@ export function AiBoardActions({ engine }: AiBoardActionsProps) {
         engine.applyLayout(updated);
         setStatus("success");
         setStatusMsg(`Applied ${action === "layout" ? "grid layout" : "cluster grouping"} to ${updated.length} shapes.`);
+      } else if (action === ("beautify" as any)) {
+        const updated = data.shapes;
+        if (!Array.isArray(updated)) throw new Error("Invalid response from server.");
+        engine.setShapes(updated);
+        setStatus("success");
+        setStatusMsg("Diagram beautified successfully!");
+      } else if (action === ("export_svg" as any)) {
+        const res = await fetch("/api/v1/export/svg", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ shapes, theme: document.documentElement.classList.contains('dark') ? 'dark' : 'light' }),
+        });
+        if (!res.ok) throw new Error("Export failed");
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "export.svg";
+        a.click();
+        setStatus("success");
+        setStatusMsg("SVG exported successfully!");
       } else {
         // summarize — add sticky note to canvas
         const note = data.stickyNote;

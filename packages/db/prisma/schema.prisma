@@ -128,7 +128,8 @@ model Board {
   isPublic    Boolean  @default(false)
   publicRole  String   @default("NONE") // NONE | VIEWER | EDITOR
   isPinned    Boolean  @default(false)
-  shapes      String   @default("[]")  // JSON stringified shapes array
+  shapes      String   @default("[]")  // JSON stringified shapes array (legacy/metadata)
+  encryptedData Bytes?                 // Phase 4: Full encrypted room file (Yjs blob)
   members     BoardMember[]
   room        Room?
   folderBoards FolderBoard[]

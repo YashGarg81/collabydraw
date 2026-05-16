@@ -11,6 +11,7 @@ import { CanvasEngine } from "@/canvas-engine/CanvasEngine";
 import { RoomParticipants } from "@repo/common/types";
 import { getRoomParamsFromHash } from "@/utils/roomParams";
 import { BgFill, canvasBgLight, FillStyle, FontFamily, FontSize, FontStyle, Mode, RoughStyle, StrokeEdge, StrokeFill, StrokeStyle, StrokeWidth, TextAlign, ToolType } from "@/types/canvas";
+import { uint8ArrayToBase64, base64ToUint8Array } from "@/utils/binary";
 import { MobileCommandBar } from "../MobileCommandBar";
 import ScreenLoading from "../ScreenLoading";
 import AppMenuButton from "../AppMenuButton";
@@ -323,12 +324,16 @@ export default function CanvasBoard() {
                 const bid = new URLSearchParams(window.location.search).get('board');
                 if (!bid) return;
                 const shapes = engine.getShapes();
+                const encryptedData = uint8ArrayToBase64(engine.getEncodedState());
                 setSaveStatus('saving');
                 try {
                     const res = await fetch(`/api/boards/${bid}`, {
                         method: 'PATCH',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ shapes }),
+                        body: JSON.stringify({ 
+                            shapes,
+                            encryptedData 
+                        }),
                     });
                     if (res.ok) {
                         setSaveStatus('saved');
@@ -442,6 +447,24 @@ export default function CanvasBoard() {
                 if (data.board?.name) setBoardName(data.board.name);
                 if (data.board?.isPublic !== undefined) setBoardIsPublic(data.board.isPublic);
                 if (data.board?.publicRole !== undefined) setBoardPublicRole(data.board.publicRole);
+                
+                // Phase 4: Persistence - Load from binary blob (Yjs) or legacy JSON
+                if (data.board?.encryptedData && canvasEngineState.engine) {
+                    try {
+                        const binary = base64ToUint8Array(data.board.encryptedData);
+                        canvasEngineState.engine.applyEncodedState(binary);
+                    } catch (e) {
+                        console.error("Error loading encrypted document blob:", e);
+                    }
+                } else if (data.board?.shapes && canvasEngineState.engine) {
+                    try {
+                        const shapes = JSON.parse(data.board.shapes);
+                        canvasEngineState.engine.addShapes(shapes);
+                    } catch (e) {
+                        console.error("Error loading legacy board shapes:", e);
+                    }
+                }
+
                 if (data.role) {
                     setUserRole(data.role);
                     if (data.role === "VIEWER" && canvasEngineState.engine) {

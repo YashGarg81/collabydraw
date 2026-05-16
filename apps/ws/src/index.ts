@@ -140,6 +140,48 @@ async function clearRoomShapes(roomId: string) {
   delete memShapes[roomId];
 }
 
+/**
+ * Phase 4: Persistence Layer
+ * Flushes transient Redis/Memory state to the relational database (PostgreSQL/SQLite)
+ */
+async function persistRoomToDatabase(roomId: string) {
+  try {
+    const room = await client.room.findUnique({
+      where: { id: roomId },
+      include: { board: true }
+    });
+    if (!room || !room.boardId) return;
+
+    const shapes = await getShapes(roomId);
+    // Extract the latest shape objects from the messages
+    const shapeList = shapes.map(s => s.message).filter(Boolean);
+
+    await client.board.update({
+      where: { id: room.boardId },
+      data: {
+        shapes: JSON.stringify(shapeList),
+        updatedAt: new Date()
+      }
+    });
+    
+    // Phase 5: Optional - Create a version snapshot
+    if (shapeList.length > 0) {
+      await client.boardSnapshot.create({
+        data: {
+          boardId: room.boardId,
+          shapes: JSON.stringify(shapeList),
+          shapeCount: shapeList.length,
+          label: "Auto-saved on room close"
+        }
+      });
+    }
+
+    console.log(`💾 Persisted room ${roomId} to board ${room.boardId}`);
+  } catch (e) {
+    console.error(`❌ Error persisting room ${roomId}:`, e);
+  }
+}
+
 // ── Broadcast via Redis (or in-memory fallback) ───────────────────────────────
 
 async function broadcast(
@@ -453,10 +495,15 @@ async function maybeDeleteRoom(roomId: string) {
   const anyConn = [...connections.values()].some(c => c.rooms.has(roomId));
   if (!anyConn) {
     try {
+      // Phase 4: Persist to DB before deleting the active room session
+      await persistRoomToDatabase(roomId);
+      
       await client.room.delete({ where: { id: roomId } });
       await clearRoomShapes(roomId);
       console.log(`Deleted empty room ${roomId}`);
-    } catch { /* might already be deleted */ }
+    } catch (e) { 
+      console.error(`Error during room ${roomId} cleanup:`, e);
+    }
   }
 }
 

@@ -4156,4 +4156,19 @@ public ungroupSelected() {
       });
     }, this.connectionId || "local");
   }
+
+  /**
+   * Phase 4: Persistence - Encodes the entire Yjs document as a binary update blob.
+   * This is stored in the database's encryptedData field.
+   */
+  public getEncodedState(): Uint8Array {
+    return Y.encodeStateAsUpdate(this.yDoc);
+  }
+
+  /**
+   * Phase 4: Persistence - Decodes and applies a binary Yjs document state.
+   */
+  public applyEncodedState(update: Uint8Array) {
+    Y.applyUpdate(this.yDoc, update);
+  }
 }

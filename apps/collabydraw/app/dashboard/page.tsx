@@ -14,6 +14,7 @@ import { PLAN_DISPLAY, PLAN_COLORS, type Plan } from "@/config/planLimits";
 import { FolderList, type FolderItem } from "@/components/FolderList";
 import { NotificationPanel } from "@/components/NotificationPanel";
 import { GlobalSearch } from "@/components/GlobalSearch";
+import { WorkspaceSwitcher } from "@/components/WorkspaceSwitcher";
 
 interface Board {
   id: string;
@@ -287,6 +288,7 @@ export default function DashboardPage() {
 
         {/* Nav */}
         <nav className="flex-1 px-3 py-4 overflow-y-auto space-y-1">
+          <WorkspaceSwitcher />
           <div className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg bg-violet-600/15 text-violet-300 text-sm font-medium">
             <LayoutGrid className="w-4 h-4" />
             My Boards

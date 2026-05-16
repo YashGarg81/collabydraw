@@ -260,6 +260,44 @@ export default async function LandingPage() {
         </div>
       </section>
 
+      {/* ── Featured Templates ── */}
+      <section className="py-24 px-4 bg-white/[0.01] border-y border-white/5">
+        <div className="max-w-6xl mx-auto">
+          <div className="flex flex-col md:flex-row items-end justify-between gap-6 mb-12">
+            <div className="text-left">
+              <h2 className="text-3xl sm:text-4xl font-bold text-white mb-4">
+                Skip the blank canvas
+              </h2>
+              <p className="text-white/50 text-lg max-w-xl">
+                Browse our marketplace for pre-designed diagrams, system architectures, 
+                and brainstorming frameworks created by the community.
+              </p>
+            </div>
+            <Link href="/templates" className="flex items-center gap-2 text-violet-400 hover:text-violet-300 font-semibold transition-colors group">
+              Explore Marketplace <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+            </Link>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+            {[
+              { name: "SaaS Infrastructure", cat: "Architecture", icon: "☁️", color: "from-blue-600/20" },
+              { name: "Brainstorming Map", cat: "Creative", icon: "🧠", color: "from-purple-600/20" },
+              { name: "User Journey Flow", cat: "Product", icon: "🗺️", color: "from-emerald-600/20" },
+            ].map((t, i) => (
+              <div key={i} className="group relative p-1 rounded-2xl bg-white/5 border border-white/10 hover:border-white/20 transition-all">
+                <div className={`h-32 rounded-xl bg-gradient-to-br ${t.color} to-transparent flex items-center justify-center text-4xl`}>
+                  {t.icon}
+                </div>
+                <div className="p-4">
+                  <div className="text-[10px] uppercase tracking-widest text-white/30 font-bold mb-1">{t.cat}</div>
+                  <h3 className="font-bold text-white group-hover:text-violet-300 transition-colors">{t.name}</h3>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
       {/* ── Pricing ── */}
       <section className="py-24 px-4" id="pricing">
         <div className="max-w-5xl mx-auto">

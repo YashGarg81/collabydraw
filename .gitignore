@@ -40,3 +40,5 @@ yarn-error.log*
 # docker
 docker
 .vercel
+*.db
+*.db-journal
