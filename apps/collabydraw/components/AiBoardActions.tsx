@@ -94,7 +94,7 @@ export function AiBoardActions({ engine }: AiBoardActionsProps) {
       } else if (action === ("beautify" as any)) {
         const updated = data.shapes;
         if (!Array.isArray(updated)) throw new Error("Invalid response from server.");
-        engine.setShapes(updated);
+        engine.updateShapes(updated);
         setStatus("success");
         setStatusMsg("Diagram beautified successfully!");
       } else if (action === ("export_svg" as any)) {

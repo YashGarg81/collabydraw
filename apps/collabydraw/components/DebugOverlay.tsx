@@ -36,7 +36,7 @@ export function DebugOverlay({ engine }: DebugOverlayProps) {
         frameCountRef.current = 0;
         lastTimeRef.current = now;
 
-        setShapeCount(engine.existingShapes.length);
+        setShapeCount(engine.getShapes().length);
         
         // Very basic memory check if supported
         // eslint-disable-next-line @typescript-eslint/no-explicit-any

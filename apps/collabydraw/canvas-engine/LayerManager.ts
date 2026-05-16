@@ -139,7 +139,15 @@ export class LayerManager {
   public createLayer(name: string): Layer {
     const id = `layer_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     const layers = this.getLayers();
-    const newOrder = ((layers.length > 0 ? parseInt(layers[layers.length - 1].order) : 0) + 1).toString().padStart(5, '0');
+    
+    let nextNum = layers.length;
+    if (layers.length > 0) {
+      const lastOrderNum = parseInt(layers[layers.length - 1].order, 10);
+      if (!isNaN(lastOrderNum)) {
+        nextNum = lastOrderNum + 1;
+      }
+    }
+    const newOrder = nextNum.toString().padStart(5, '0');
 
     const layer: Layer = { id, name, visible: true, locked: false, order: newOrder };
     this.doc.transact(() => { this.yLayers.set(id, layer); }, this.localOrigin);

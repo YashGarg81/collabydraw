@@ -730,11 +730,18 @@ button {
   color: var(--color-gray-10);
 }
 
+.collabydraw-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+}
+
 .dark .collabydraw-canvas,
 .dark .collabydraw-canvas-dark {
   filter: var(--theme-filter);
-  position: absolute;
-  z-index: 2;
 }
 
 .canvas-bg-color-item {

@@ -1,31 +1,6 @@
 "use client";
 
-const COLLABORATOR_COLORS = [
-  "#f08c00", // Orange
-  "#2f9e44", // Green
-  "#1971c2", // Blue
-  "#e64980", // Pink
-  "#7950f2", // Violet
-  "#e03131", // Red
-  "#0b7285", // Cyan
-  "#5f3dc4", // Grape
-  "#66a80f", // Lime
-  "#d9480f", // Vermilion
-];
-
-/**
- * Returns a deterministic color for a given ID (userId or connectionId)
- */
-export function getCollaboratorColor(id: string): string {
-  if (!id) return COLLABORATOR_COLORS[0];
-  let hash = 0;
-  for (let i = 0; i < id.length; i++) {
-    hash = id.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  return COLLABORATOR_COLORS[Math.abs(hash) % COLLABORATOR_COLORS.length];
-}
-
-export interface CursorState {
+export type CursorState = {
   x: number;
   y: number;
   targetX: number;
@@ -37,5 +12,24 @@ export interface CursorState {
   isLaser?: boolean;
   isEditing?: boolean;
   selectionIds?: string[];
-  viewport?: { x: number, y: number, w: number, h: number };
+  viewport?: {
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+  };
+};
+
+export function getCollaboratorColor(id: string): string {
+  const colors = [
+    "#E91E63", "#9C27B0", "#673AB7", "#3F51B5", "#2196F3",
+    "#03A9F4", "#00BCD4", "#009688", "#4CAF50", "#8BC34A",
+    "#CDDC39", "#FFEB3B", "#FFC107", "#FF9800", "#FF5722",
+  ];
+  if (!id) return colors[0];
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) {
+    hash = id.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return colors[Math.abs(hash) % colors.length];
 }

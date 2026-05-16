@@ -8,7 +8,7 @@ import { PrismaAdapter } from "@next-auth/prisma-adapter";
 import jwt from "jsonwebtoken";
 
 export const authOptions: NextAuthOptions = {
-  adapter: PrismaAdapter(client),
+  adapter: PrismaAdapter(client as any),
   session: {
     strategy: "jwt",
   },
@@ -99,8 +99,11 @@ export const authOptions: NextAuthOptions = {
       }
       return true;
     },
-    async jwt({ token, user, account }) {
-      // On OAuth sign-in or Credentials sign-in
+    async jwt({ token, user }) {
+      // Only run the DB lookup + token signing on initial sign-in
+      // (when `user` is populated by NextAuth after credentials/OAuth auth).
+      // On subsequent session refreshes `user` is undefined — skip the DB
+      // query and expensive jwt.sign() call entirely.
       if (user?.email) {
         const dbUser = await client.user.findUnique({
           where: { email: user.email },
@@ -111,23 +114,23 @@ export const authOptions: NextAuthOptions = {
           token.role = dbUser.role;
           token.isBanned = dbUser.isBanned;
         }
-      }
 
-      if (!process.env.JWT_SECRET) {
-        throw new Error("JWT_SECRET is required");
+        if (!process.env.JWT_SECRET) {
+          throw new Error("JWT_SECRET is required");
+        }
+
+        // The JWT token exposed to the client and WS (signed once at login)
+        token.accessToken = jwt.sign(
+          {
+            id: token.id,
+            email: token.email,
+            role: token.role,
+            isBanned: token.isBanned
+          },
+          process.env.JWT_SECRET,
+          { expiresIn: "7d" }
+        );
       }
-      
-      // The JWT token exposed to the client and WS
-      token.accessToken = jwt.sign(
-        { 
-          id: token.id, 
-          email: token.email,
-          role: token.role,
-          isBanned: token.isBanned
-        },
-        process.env.JWT_SECRET,
-        { expiresIn: "7d" }
-      );
       return token;
     },
     async session({ session, token }) {

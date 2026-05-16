@@ -9,23 +9,26 @@ export default withAuth(
     const ip = req.headers.get("x-forwarded-for") ?? "127.0.0.1";
     const path = req.nextUrl.pathname;
 
-    let limitType: "global" | "ai" | "auth" | "websocket" = "global";
-    
-    if (path.startsWith("/api/ai")) limitType = "ai";
-    else if (path.startsWith("/api/auth")) limitType = "auth";
-    else if (path.startsWith("/api/ws")) limitType = "websocket";
+    // Only apply rate limiting to API routes
+    if (path.startsWith("/api")) {
+      let limitType: "global" | "ai" | "auth" | "websocket" = "global";
+      
+      if (path.startsWith("/api/ai")) limitType = "ai";
+      else if (path.startsWith("/api/auth")) limitType = "auth";
+      else if (path.startsWith("/api/ws")) limitType = "websocket";
 
-    const { success, limit, reset, remaining } = await checkRateLimit(`${limitType}_${ip}`, limitType);
+      const { success, limit, reset, remaining } = await checkRateLimit(`${limitType}_${ip}`, limitType);
 
-    if (!success) {
-      return new NextResponse("Too Many Requests", {
-        status: 429,
-        headers: {
-          "X-RateLimit-Limit": limit.toString(),
-          "X-RateLimit-Remaining": remaining.toString(),
-          "X-RateLimit-Reset": reset.toString(),
-        },
-      });
+      if (!success) {
+        return new NextResponse("Too Many Requests", {
+          status: 429,
+          headers: {
+            "X-RateLimit-Limit": limit.toString(),
+            "X-RateLimit-Remaining": remaining.toString(),
+            "X-RateLimit-Reset": reset.toString(),
+          },
+        });
+      }
     }
 
     return NextResponse.next();

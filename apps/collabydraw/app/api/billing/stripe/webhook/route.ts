@@ -3,7 +3,7 @@ import Stripe from "stripe";
 import client from "@repo/db/client";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "sk_test_123", {
-  apiVersion: "2024-12-18.acacia",
+  apiVersion: "2026-04-22.dahlia" as any,
 });
 
 const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
@@ -37,15 +37,18 @@ export async function POST(req: NextRequest) {
           const customerId = session.customer as string;
 
           const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const subAny = subscription as any;
+          const periodEnd = subAny.current_period_end ?? subAny.items?.data?.[0]?.current_period_end ?? 0;
           
           await client.subscription.create({
             data: {
               userId: userId,
               stripeSubscriptionId: subscription.id,
               stripeCustomerId: customerId,
-              stripePriceId: subscription.items.data[0].price.id,
+              stripePriceId: subscription.items.data[0]!.price.id,
               status: subscription.status,
-              currentPeriodEnd: new Date(subscription.current_period_end * 1000),
+              currentPeriodEnd: new Date(periodEnd * 1000),
             },
           });
 
@@ -80,12 +83,15 @@ export async function POST(req: NextRequest) {
       case "customer.subscription.updated":
       case "customer.subscription.deleted": {
         const subscription = event.data.object as Stripe.Subscription;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const subAny = subscription as any;
+        const periodEnd = subAny.current_period_end ?? subAny.items?.data?.[0]?.current_period_end ?? 0;
         
         await client.subscription.update({
           where: { stripeSubscriptionId: subscription.id },
           data: {
             status: subscription.status,
-            currentPeriodEnd: new Date(subscription.current_period_end * 1000),
+            currentPeriodEnd: new Date(periodEnd * 1000),
             cancelAtPeriodEnd: subscription.cancel_at_period_end,
           },
         });

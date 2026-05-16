@@ -50,9 +50,17 @@ export async function POST(req: NextRequest) {
     const text = result.response.text().trim();
     const cleaned = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
 
-    const beautifiedShapes = JSON.parse(cleaned);
+    let beautifiedShapes: unknown;
+    try {
+      beautifiedShapes = JSON.parse(cleaned);
+    } catch {
+      return NextResponse.json(
+        { error: "AI returned malformed JSON. Please try again." },
+        { status: 422 }
+      );
+    }
 
-    // Deduct credit
+    // Deduct credit only on success
     await client.user.update({
       where: { id: session.user.id },
       data: { aiCredits: { decrement: 1 } }

@@ -105,6 +105,12 @@ export async function POST(req: NextRequest) {
         shapes: source.shapes,
         isPublic: false,
         isPinned: false,
+        members: {
+          create: {
+            userId: session.user.id,
+            role: "OWNER"
+          }
+        }
       },
     });
     
@@ -117,7 +123,18 @@ export async function POST(req: NextRequest) {
   const name = (body.name as string) || "Untitled Board";
   const description = (body.description as string) || null;
   const board = await client.board.create({
-    data: { name, description, ownerId: session.user.id, shapes: "[]" },
+    data: { 
+      name, 
+      description, 
+      ownerId: session.user.id, 
+      shapes: "[]",
+      members: {
+        create: {
+          userId: session.user.id,
+          role: "OWNER"
+        }
+      }
+    },
   });
 
   await fireWebhook(session.user.id, "board.created", board);

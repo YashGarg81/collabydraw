@@ -6,7 +6,7 @@ import client from "@repo/db/client";
 
 // Ensure you set STRIPE_SECRET_KEY in your .env
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "sk_test_123", {
-  apiVersion: "2024-12-18.acacia",
+  apiVersion: "2026-04-22.dahlia" as any,
 });
 
 export async function POST(req: NextRequest) {

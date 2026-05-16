@@ -45,7 +45,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ tok
     // Create a notification for the board owner
     client.notification.create({
       data: {
-        userId: invite.board.ownerId,
+        userId: invite.board.ownerId as string,
         type: "member_joined",
         payload: JSON.stringify({
           boardId: invite.boardId,

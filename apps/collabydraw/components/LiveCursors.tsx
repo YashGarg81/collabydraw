@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef } from "react";
+import { useRef, useCallback } from "react";
 
 interface RemoteCursor {
   userId: string;
@@ -74,16 +74,16 @@ export function useRemoteCursors() {
   const cursorsRef = useRef<Map<string, RemoteCursor>>(new Map());
   const renderRef = useRef<(() => void) | null>(null);
 
-  const updateCursor = (userId: string, userName: string, x: number, y: number) => {
+  const updateCursor = useCallback((userId: string, userName: string, x: number, y: number) => {
     const color = userColor(userId);
     cursorsRef.current.set(userId, { userId, userName, x, y, color, lastSeen: Date.now() });
     renderRef.current?.();
-  };
+  }, []);
 
-  const removeCursor = (userId: string) => {
+  const removeCursor = useCallback((userId: string) => {
     cursorsRef.current.delete(userId);
     renderRef.current?.();
-  };
+  }, []);
 
   return { cursorsRef, updateCursor, removeCursor, renderRef };
 }

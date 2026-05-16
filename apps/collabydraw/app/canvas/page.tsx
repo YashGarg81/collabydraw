@@ -1,5 +1,6 @@
 import { Suspense } from "react";
 import CanvasBoard from "@/components/canvas/CanvasBoard";
+import ScreenLoading from "@/components/ScreenLoading";
 import type { Metadata } from "next";
 import { baseMetadata } from "@/utils/metadata";
 
@@ -19,7 +20,7 @@ export const metadata: Metadata = {
 
 export default async function CanvasPage() {
   return (
-    <Suspense fallback={null}>
+    <Suspense fallback={<ScreenLoading />}>
       <CanvasBoard />
     </Suspense>
   );

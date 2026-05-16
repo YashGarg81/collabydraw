@@ -8,9 +8,10 @@ import Link from 'next/link';
 import { useTheme } from "next-themes";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { CanvasEngine } from "@/canvas-engine/CanvasEngine";
-import { RoomParticipants } from "@repo/common/types";
+import { CommentThread } from "./CommentThread";
+import { RoomParticipants, WebSocketMessage, WsDataType } from "@repo/common/types";
 import { getRoomParamsFromHash } from "@/utils/roomParams";
-import { BgFill, canvasBgLight, FillStyle, FontFamily, FontSize, FontStyle, Mode, RoughStyle, StrokeEdge, StrokeFill, StrokeStyle, StrokeWidth, TextAlign, ToolType } from "@/types/canvas";
+import { BgFill, canvasBgLight, canvasBgDark, FillStyle, FontFamily, FontSize, FontStyle, Mode, RoughStyle, Shape, StrokeEdge, StrokeFill, StrokeStyle, StrokeWidth, TextAlign, ToolType } from "@/types/canvas";
 import { uint8ArrayToBase64, base64ToUint8Array } from "@/utils/binary";
 import { MobileCommandBar } from "../MobileCommandBar";
 import ScreenLoading from "../ScreenLoading";
@@ -49,7 +50,6 @@ export default function CanvasBoard() {
     const [mode, setMode] = useState<Mode>("standalone");
     const [participants, setParticipants] = useState<RoomParticipants[]>([]);
     const [isConnected, setIsConnected] = useState(false);
-    const [isCanvasReady, setIsCanvasReady] = useState(false);
     const [followingUserId, setFollowingUserId] = useState<string | null>(null);
     const initializedWithMode = useRef<Mode | null>(null);
 
@@ -67,7 +67,7 @@ export default function CanvasBoard() {
     const [boardId, setBoardId] = useState<string | null>(null);
     const [boardIsPublic, setBoardIsPublic] = useState(false);
     const [boardPublicRole, setBoardPublicRole] = useState("NONE");
-    const [userRole, setUserRole] = useState<string>("VIEWER");
+    const [userRole, setUserRole] = useState<string>("EDITOR");
     const [boardName, setBoardName] = useState("Untitled Board");
     // ── Phase 5: Version history + live cursors ─────────────────────────────
     const [versionHistoryOpen, setVersionHistoryOpen] = useState(false);
@@ -173,8 +173,9 @@ export default function CanvasBoard() {
     }, [pathname, searchParams, status, session, router]);
 
     useEffect(() => {
-        setCanvasEngineState(prev => ({ ...prev, canvasColor: canvasBgLight[0] }));
-        console.log('Theme = ', theme)
+        // Keep canvas background in sync with the active theme.
+        const newColor = theme === "dark" ? canvasBgDark[0] : canvasBgLight[0];
+        setCanvasEngineState(prev => ({ ...prev, canvasColor: newColor }));
     }, [theme])
 
     useEffect(() => {
@@ -280,16 +281,11 @@ export default function CanvasBoard() {
         }
     }, []);
 
+    // Wire React-layer tool-shortcut keys to window (BUG-021 fix)
     useEffect(() => {
-        const checkCanvasInterval = setInterval(() => {
-            if (canvasRef.current) {
-                setIsCanvasReady(true);
-                clearInterval(checkCanvasInterval);
-            }
-        }, 100);
-
-        return () => clearInterval(checkCanvasInterval);
-    }, []);
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [handleKeyDown]);
 
     const initializeCanvasEngine = useCallback(() => {
         if (!canvasRef.current) return null;
@@ -415,50 +411,56 @@ export default function CanvasBoard() {
             updateCursor(userId, userName, x, y);
         };
         return engine;
-    }, [canvasEngineState.canvasColor, mode, theme, updateCursor]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [mode, updateCursor, theme]);
 
     useEffect(() => {
-        if (!isCanvasReady) return;
-        if (initializedWithMode.current !== mode) {
-            if (canvasEngineState.engine) {
-                canvasEngineState.engine.destroy();
-            }
-            const waitReaddy = setTimeout(() => {
-                if (!canvasRef.current) return;
-                const engine = initializeCanvasEngine();
+        if (!canvasRef.current) return;
+        if (initializedWithMode.current === mode) return;
 
-                if (engine) {
-                    initializedWithMode.current = mode;
-                    setCanvasEngineState(prev => ({ ...prev, engine }));
-                    // Sync shapes that were loaded from localStorage on init
-                    setCanvasShapes(engine.getShapes());
-
-                    const handleResize = () => {
-                        if (canvasRef.current) {
-                            const canvas = canvasRef.current;
-                            canvas.width = window.innerWidth || document.documentElement.clientWidth;
-                            canvas.height = window.innerHeight || document.documentElement.clientHeight;
-                            engine.handleResize(window.innerWidth, window.innerHeight);
-                        }
-                    };
-
-                    handleResize();
-                    window.addEventListener('resize', handleResize);
-
-                    document.addEventListener("keydown", handleKeyDown);
-
-                    return () => {
-                        window.removeEventListener('resize', handleResize);
-                        document.removeEventListener("keydown", handleKeyDown);
-                        engine.destroy();
-                    };
-                }
-            }, 1000)
-            return () => clearTimeout(waitReaddy);
+        if (canvasEngineState.engine) {
+            canvasEngineState.engine.destroy();
         }
-    }, [handleKeyDown, initializeCanvasEngine, isCanvasReady, isConnected, mode, canvasEngineState.engine]);
 
-    // Load board data (shapes + meta) on initial mount
+        const canvas = canvasRef.current;
+        canvas.style.width = '100%';
+        canvas.style.height = '100%';
+
+        const engine = initializeCanvasEngine();
+        if (!engine) return;
+
+        initializedWithMode.current = mode;
+        setCanvasEngineState(prev => ({ ...prev, engine }));
+        setCanvasShapes(engine.getShapes());
+
+        const resizeCanvas = () => {
+            if (!canvasRef.current) return;
+            const rect = canvasRef.current.getBoundingClientRect();
+            const width = Math.max(1, Math.round(rect.width || window.innerWidth));
+            const height = Math.max(1, Math.round(rect.height || window.innerHeight));
+            if (canvasRef.current.width !== width || canvasRef.current.height !== height) {
+                canvasRef.current.width = width;
+                canvasRef.current.height = height;
+                engine.handleResize(width, height);
+            }
+        };
+
+        window.requestAnimationFrame(() => resizeCanvas());
+
+        const observer = new ResizeObserver(() => resizeCanvas());
+        // Observe the canvas container, not the canvas itself.
+        // A <canvas> driven by attribute width/height won't fire ResizeObserver
+        // on its own — we need its CSS layout parent to detect size changes.
+        observer.observe(canvas.parentElement ?? document.body);
+        window.addEventListener('resize', resizeCanvas);
+
+        return () => {
+            window.removeEventListener('resize', resizeCanvas);
+            observer.disconnect();
+            engine.destroy();
+            initializedWithMode.current = null;
+        };
+    }, [mode, initializeCanvasEngine]); // Only re-run when mode or init function changes
     useEffect(() => {
         const bid = new URLSearchParams(window.location.search).get('board');
         if (!bid || !canvasEngineState.engine) return;
@@ -509,7 +511,7 @@ export default function CanvasBoard() {
                 }
             }
         });
-    }, [boardId, canvasEngineState.engine, pathname]);
+    }, [canvasEngineState.engine, pathname]);  // boardId intentionally excluded: it is SET inside this effect
 
     const clearCanvas = useCallback(() => {
         canvasEngineState.engine?.clearAllShapes();
@@ -750,7 +752,7 @@ export default function CanvasBoard() {
             </div>
 
             {canvasEngineState.activeTool === "grab" && canvasEngineState.isCanvasEmpty && !isLoading && (
-                <div className="relative">
+                <div className="relative pointer-events-none">
                     <ToolMenuWelcome />
                 </div>
             )}
@@ -921,7 +923,9 @@ export default function CanvasBoard() {
             )}
 
             {!isLoading && canvasEngineState.activeTool === "grab" && canvasEngineState.isCanvasEmpty && (
-                <HomeWelcome />
+                <div className="pointer-events-none">
+                    <HomeWelcome />
+                </div>
             )}
 
             {isLoading && (
@@ -953,7 +957,11 @@ export default function CanvasBoard() {
                 )
             })}
 
-            <canvas className={cn("collabydraw collabydraw-canvas touch-none", theme === 'dark' ? 'collabydraw-canvas-dark' : '')} ref={canvasRef} />
+            <canvas
+                ref={canvasRef}
+                className={cn("collabydraw collabydraw-canvas touch-none", theme === 'dark' ? 'collabydraw-canvas-dark' : '')}
+                style={{ width: '100%', height: '100%' }}
+            />
 
             {/* Phase 5: Live remote cursor overlay (room mode only) */}
             {mode === 'room' && (
@@ -975,8 +983,8 @@ export default function CanvasBoard() {
                     scale={canvasEngineState.scale}
                     currentUserId={session?.user?.id || "guest"}
                     currentUserName={session?.user?.name || "Guest"}
-                    onUpdate={(updated) => canvasEngineState.engine?.updateShape(updated)}
-                    onDelete={(id) => canvasEngineState.engine?.removeShape(id)}
+                    onUpdate={(updated: Shape) => canvasEngineState.engine?.updateShape(updated)}
+                    onDelete={(id: string) => canvasEngineState.engine?.removeShape(id)}
                 />
             ))}
 

@@ -39,7 +39,13 @@ export async function GET(_req: NextRequest, { params }: Params) {
   else if (member) role = member.role;
   else if (board.isPublic) role = board.publicRole;
 
-  return NextResponse.json({ board, role });
+  // Phase 4: Serialize binary blob to base64 for the frontend
+  const serializedBoard = {
+    ...board,
+    encryptedData: board.encryptedData ? Buffer.from(board.encryptedData).toString('base64') : null
+  };
+
+  return NextResponse.json({ board: serializedBoard, role });
 }
 
 // PATCH /api/boards/:id — update name, description, thumbnail, shapes
@@ -81,7 +87,13 @@ export async function PATCH(req: NextRequest, { params }: Params) {
 
   await fireWebhook(session.user.id, "board.updated", updated);
 
-  return NextResponse.json({ board: updated });
+  // Phase 4: Serialize binary blob to base64 for the frontend
+  const serializedBoard = {
+    ...updated,
+    encryptedData: updated.encryptedData ? Buffer.from(updated.encryptedData).toString('base64') : null
+  };
+
+  return NextResponse.json({ board: serializedBoard });
 }
 
 // DELETE /api/boards/:id

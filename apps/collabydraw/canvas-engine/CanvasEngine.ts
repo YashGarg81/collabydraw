@@ -12,7 +12,7 @@ import {
   TextAlign,
   ToolType,
 } from "@/types/canvas";
-import { getCollaboratorColor, type CursorState } from "../utils/collaboratorUtils";
+import { getCollaboratorColor, type CursorState } from "@/utils/collaboratorUtils";
 import { TransformEngine } from "./TransformEngine";
 import { SelectionController } from "./SelectionController";
 import { v4 as uuidv4 } from "uuid";
@@ -52,7 +52,6 @@ import { roundRect } from "@/shape-render/roundRect";
 import { getClientColor } from "@/utils/getClientColor";
 import { getStreamKey } from "@/utils/getStreamKey";
 import { SpatialIndex } from "./SpatialIndex";
-import { TransformEngine } from "./TransformEngine";
 import { GroupManager, GroupDescriptor } from "./GroupManager";
 import { SnapEngine } from "./SnapEngine";
 import { CommandManager, AddShapeCommand, RemoveShapeCommand, UpdateShapeCommand, BatchCommand } from "./CommandManager";
@@ -110,6 +109,7 @@ export class CanvasEngine {
   private yUndoManager: Y.UndoManager;
   private connectionId: string | null = null;
   private myConnections: { connectionId: string; connected: boolean }[] = [];
+  private isDestroyed: boolean = false;
   public onHistoryChange: ((canUndo: boolean, canRedo: boolean) => void) | null = null;
 
   private isDraggingCanvas: boolean = false;
@@ -123,7 +123,7 @@ export class CanvasEngine {
   private hoveredShapeId: string | null = null;
   
   private SelectionController: SelectionController;
-  private cachedShapes: Shape[] = [];
+  private existingShapes: Shape[] = [];
   private spatialIndex: SpatialIndex = new SpatialIndex();
   private groupManager: GroupManager = new GroupManager();
   private snapEngine: SnapEngine = new SnapEngine();
@@ -244,8 +244,13 @@ export class CanvasEngine {
     appTheme: "light" | "dark" | null
   ) {
     this.canvas = canvas;
-    this.ctx = canvas.getContext("2d")!;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      throw new Error("Canvas 2D context is not available. Ensure the canvas is mounted and the browser supports HTMLCanvasElement.getContext('2d').");
+    }
+    this.ctx = ctx;
     this.roughCanvas = rough.canvas(canvas);
+    // [CanvasEngine] Constructed
     this.canvasBgColor = canvasBgColor;
     this.roomId = roomId;
     this.userId = userId;
@@ -302,8 +307,11 @@ export class CanvasEngine {
       }
     });
 
-    this.canvas.width = document.body.clientWidth;
-    this.canvas.height = document.body.clientHeight;
+    const rect = this.canvas.getBoundingClientRect();
+    const initialWidth = Math.max(1, Math.round(rect.width || document.body.clientWidth || window.innerWidth));
+    const initialHeight = Math.max(1, Math.round(rect.height || document.body.clientHeight || window.innerHeight));
+    this.canvas.width = initialWidth;
+    this.canvas.height = initialHeight;
 
     this.currentTheme = appTheme;
 
@@ -328,6 +336,35 @@ export class CanvasEngine {
     this.presenceAnimFrameId = requestAnimationFrame(this.animatePresence);
   }
 
+  public destroy() {
+    this.isDestroyed = true;
+    this.canvas.removeEventListener("mousedown", this.mouseDownHandler);
+    this.canvas.removeEventListener("mousemove", this.mouseMoveHandler);
+    this.canvas.removeEventListener("mouseup", this.mouseUpHandler);
+    this.canvas.removeEventListener("wheel", this.mouseWheelHandler);
+    this.canvas.removeEventListener("touchstart", this.touchStartHandler);
+    this.canvas.removeEventListener("touchmove", this.touchMoveHandler);
+    this.canvas.removeEventListener("touchend", this.touchEndHandler);
+    window.removeEventListener("keydown", this.handleKeyDown);
+
+    if (this.presenceAnimFrameId) cancelAnimationFrame(this.presenceAnimFrameId);
+    if (this.laserAnimFrameId) cancelAnimationFrame(this.laserAnimFrameId);
+    if (this.flushInterval) clearInterval(this.flushInterval);
+    if (this.cursorThrottleTimeout) clearTimeout(this.cursorThrottleTimeout);
+    if (this.streamingThrottleTimeout) clearTimeout(this.streamingThrottleTimeout);
+    if (this.socket) {
+      if (this.socket.readyState === WebSocket.OPEN) {
+        this.socket.send(JSON.stringify({
+          type: WsDataType.LEAVE,
+          roomId: this.roomId,
+        }));
+      }
+      this.socket.close();
+      this.socket = null;
+    }
+    this.yUndoManager.destroy();
+    this.yDoc.destroy();
+  }
   private animatePresence = (now: number) => {
     const dt = now - this.presenceLastTick;
     this.presenceLastTick = now;
@@ -611,8 +648,9 @@ export class CanvasEngine {
     this.socket.onclose = (e) => {
       this.isConnected = false;
       this.onConnectionChange?.(false);
-      console.warn("WebSocket closed:", e);
-      setTimeout(() => this.connectWebSocket(), 2000);
+      if (!this.isDestroyed) {
+        setTimeout(() => this.connectWebSocket(), 2000);
+      }
     };
 
     this.socket.onerror = (err) => {
@@ -748,10 +786,16 @@ export class CanvasEngine {
 
   async init() {
     window.addEventListener("keydown", this.handleKeyDown);
-    this.clearCanvas();
+    console.debug("[CanvasEngine] init: canvas size", this.canvas.width, this.canvas.height);
+    try {
+      this.clearCanvas();
+    } catch (e) {
+      console.error("[CanvasEngine] error during initial clearCanvas:", e);
+    }
   }
 
   initMouseHandler() {
+    // [CanvasEngine] initMouseHandler - attaching listeners
     this.canvas.addEventListener("mousedown", this.mouseDownHandler);
     this.canvas.addEventListener("mousemove", this.mouseMoveHandler);
     this.canvas.addEventListener("mouseup", this.mouseUpHandler);
@@ -793,8 +837,6 @@ export class CanvasEngine {
   }
 
   setCanvasBgColor(color: string) {
-    this.ctx.fillStyle = color;
-    this.clearCanvas();
     if (this.canvasBgColor !== color) {
       this.canvasBgColor = color;
       this.clearCanvas();
@@ -897,6 +939,7 @@ export class CanvasEngine {
   }
 
   clearCanvas() {
+<<<<<<< HEAD
     this.ctx.setTransform(this.scale, 0, 0, this.scale, this.panX, this.panY);
     this.ctx.clearRect(-this.panX / this.scale, -this.panY / this.scale, this.canvas.width / this.scale, this.canvas.height / this.scale);
     this.ctx.fillStyle = this.canvasBgColor;
@@ -943,12 +986,99 @@ export class CanvasEngine {
       this.renderSingleShape(shape);
       this.ctx.restore();
     });
+=======
+    try {
+      this.ctx.setTransform(this.scale, 0, 0, this.scale, this.panX, this.panY);
+      this.ctx.clearRect(-this.panX / this.scale, -this.panY / this.scale, this.canvas.width / this.scale, this.canvas.height / this.scale);
+      this.ctx.fillStyle = this.canvasBgColor;
+      this.ctx.fillRect(-this.panX / this.scale, -this.panY / this.scale, this.canvas.width / this.scale, this.canvas.height / this.scale);
 
-    if (this.activeTextarea && this.activeTextPosition) {
-      const { x, y } = this.activeTextPosition;
-      this.activeTextarea.style.transform = `translate(${x * this.scale + this.panX}px, ${y * this.scale + this.panY}px)`;
+      if (this.snapEngine.config.gridEnabled) {
+        this.snapEngine.drawGrid(this.ctx, this.panX, this.panY, this.scale, this.canvas.width, this.canvas.height, this.currentTheme === "dark");
+      }
+
+      const viewportBounds = {
+        minX: -this.panX / this.scale,
+        minY: -this.panY / this.scale,
+        maxX: (-this.panX + this.canvas.width) / this.scale,
+        maxY: (-this.panY + this.canvas.height) / this.scale,
+      };
+
+      const shapesToRender = this.spatialIndex.getVisibleShapes(viewportBounds);
+      if (!Array.isArray(shapesToRender)) {
+        console.warn("[CanvasEngine] unexpected shapesToRender type:", typeof shapesToRender, shapesToRender);
+      }
+      const layerSorted = this.layerManager.filterAndSort(shapesToRender);
+      layerSorted.forEach((shape: Shape) => {
+        try {
+          const isBeingStreamed = [...this.remoteStreamingShapes.values()].some(s => s.id === shape.id);
+          if (isBeingStreamed) return;
+
+          // Hover Affordance
+          if (this.hoveredShapeId === shape.id && this.activeTool === "selection" && !this.SelectionController.getSelectedShapes().find(s => s.id === shape.id)) {
+            this.ctx.save();
+            TransformEngine.applyTransform(this.ctx, shape);
+            const bounds = this.SelectionController.getShapeBounds(shape);
+            this.ctx.strokeStyle = "rgba(105, 101, 219, 0.4)";
+            this.ctx.lineWidth = 1.5 / this.scale;
+            this.ctx.strokeRect(bounds.x - 2, bounds.y - 2, bounds.width + 4, bounds.height + 4);
+            this.ctx.restore();
+          }
+
+          this.ctx.save();
+          TransformEngine.applyTransform(this.ctx, shape);
+          this.renderSingleShape(shape);
+          this.ctx.restore();
+        } catch (e) {
+          console.error("[CanvasEngine] error rendering shape", shape?.id, shape, e);
+        }
+      });
+
+      this.remoteStreamingShapes.forEach((shape) => {
+        this.ctx.save();
+        TransformEngine.applyTransform(this.ctx, shape);
+        this.renderSingleShape(shape);
+        this.ctx.restore();
+      });
+
+      if (this.activeTextarea && this.activeTextPosition) {
+        const { x, y } = this.activeTextPosition;
+        this.activeTextarea.style.transform = `translate(${x * this.scale + this.panX}px, ${y * this.scale + this.panY}px)`;
+      }
+
+      if (this.activeTool === "selection" && this.isMarqueeSelecting) {
+        this.drawMarquee();
+      }
+>>>>>>> f593772 (fix: resolve all TS errors, canvas white-screen, and React Strict Mode bugs)
+
+      if (this.activeTool === "lasso" && this.isLassoSelecting && this.lassoPoints.length > 1) {
+        this.drawLasso();
+      }
+
+      if (this.laserStrokes.length > 0) {
+        this.drawLaserStrokes();
+      }
+
+      if (this.SelectionController.hasSelection() && this.activeTool === "selection") {
+        this.SelectionController.drawSelectionBox();
+      }
+
+      if (this.SelectionController.activeSnapLines?.length > 0) {
+        this.drawSnapLines(viewportBounds);
+      }
+
+      // Multiplayer Presence
+      try {
+        this.renderPresence(viewportBounds);
+      } catch (e) {
+        console.error("Error rendering presence:", e);
+      }
+    } catch (err) {
+      console.error("Critical error in render loop:", err);
     }
+  }
 
+<<<<<<< HEAD
     if (this.activeTool === "selection" && this.isMarqueeSelecting) {
       this.drawMarquee();
     }
@@ -975,6 +1105,8 @@ export class CanvasEngine {
     this.ctx.restore();
   }
 
+=======
+>>>>>>> f593772 (fix: resolve all TS errors, canvas white-screen, and React Strict Mode bugs)
   private renderSingleShape(shape: Shape) {
     if (shape.type === "rectangle") {
       this.drawRect(shape.x, shape.y, shape.width, shape.height, shape.strokeWidth || DEFAULT_STROKE_WIDTH, shape.strokeFill || DEFAULT_STROKE_FILL, shape.bgFill || DEFAULT_BG_FILL, shape.rounded, shape.strokeStyle, shape.roughStyle, shape.fillStyle);
@@ -1017,8 +1149,13 @@ export class CanvasEngine {
       }
       // Selections
       if (state.selectionIds?.length) {
+<<<<<<< HEAD
         state.selectionIds.forEach(id => {
           const shape = this.existingShapes.find(s => s.id === id);
+=======
+        state.selectionIds.forEach((id: string) => {
+          const shape = this.existingShapes.find((s: Shape) => s.id === id);
+>>>>>>> f593772 (fix: resolve all TS errors, canvas white-screen, and React Strict Mode bugs)
           if (shape) {
             this.ctx.save();
             TransformEngine.applyTransform(this.ctx, shape);
@@ -1054,6 +1191,7 @@ export class CanvasEngine {
       this.ctx.stroke();
       this.ctx.font = "600 11px Inter, system-ui, sans-serif";
       const tagWidth = this.ctx.measureText(state.userName).width + 12;
+<<<<<<< HEAD
       this.ctx.fillStyle = color;
       this.ctx.beginPath();
       roundRect(this.ctx, screenX + 10, screenY + 20, tagWidth, 20, 4);
@@ -1068,6 +1206,23 @@ export class CanvasEngine {
         }
         
         this.ctx.restore();
+=======
+      // Draw the colored badge background first
+      this.ctx.fillStyle = color;
+      this.ctx.beginPath();
+      roundRect(this.ctx, screenX + 10, screenY + 20, tagWidth, 20, 4);
+      this.ctx.fill();          // ← was missing: actually paint the badge
+      // Then draw the white name text on top
+      this.ctx.fillStyle = "white";
+      this.ctx.fillText(state.userName, screenX + 16, screenY + 34);
+
+      if (state.isEditing) {
+        this.ctx.font = "italic 9px Inter, sans-serif";
+        this.ctx.fillStyle = "rgba(255,255,255,0.7)";
+        this.ctx.fillText("Editing...", screenX + 16, screenY + 44);
+      }
+      this.ctx.restore();
+>>>>>>> f593772 (fix: resolve all TS errors, canvas white-screen, and React Strict Mode bugs)
     });
   }
 
@@ -1166,8 +1321,12 @@ export class CanvasEngine {
     this.ctx.restore();
   }
 
+<<<<<<< HEAD
   }
   }
+=======
+
+>>>>>>> f593772 (fix: resolve all TS errors, canvas white-screen, and React Strict Mode bugs)
 
   public getShapeCenter(shape: Shape): { x: number; y: number } {
   const bounds = this.SelectionController.getShapeBounds(shape);
@@ -1242,6 +1401,7 @@ mouseDownHandler = (e: MouseEvent) => {
   }
 
   const { x, y } = this.transformPanScale(e.clientX, e.clientY);
+  // [CanvasEngine] mouseDown: clientX=%d clientY=%d tool=%s
   if (this.activeTool === "selection") {
     if (this.SelectionController.hasSelection()) {
       const handle = this.SelectionController.getResizeHandleAtPoint(x, y);
@@ -1306,6 +1466,13 @@ mouseDownHandler = (e: MouseEvent) => {
     }
   }
 
+  if (this.activeTool === "grab") {
+    this.isDraggingCanvas = true;
+    this.lastMouseX = e.clientX;
+    this.lastMouseY = e.clientY;
+    return;
+  }
+
   this.clicked = true;
   this.startX = this.isSnapToGrid ? Math.round(x / 20) * 20 : x;
   this.startY = this.isSnapToGrid ? Math.round(y / 20) * 20 : y;
@@ -1362,9 +1529,6 @@ mouseDownHandler = (e: MouseEvent) => {
     this.isLassoSelecting = true;
     this.lassoPoints = [{ x, y }];
     this.SelectionController.setSelectedShapes([]);
-  } else if (this.activeTool === "grab") {
-    this.startX = e.clientX;
-    this.startY = e.clientY;
   }
   this.clearCanvas();
 };
@@ -1514,7 +1678,8 @@ mouseUpHandler = (e: MouseEvent) => {
   const width = snappedX - this.startX;
   const height = snappedY - this.startY;
 
-  const isClick = Math.abs(width) > 5 && Math.abs(height) > 5;
+  const isClick = Math.abs(width) > 5 || Math.abs(height) > 5;
+  // [CanvasEngine] mouseUp: clientX=%d clientY=%d tool=%s
 
   if (isClick) {
     let shape: Shape | null = null;
@@ -1701,9 +1866,11 @@ mouseUpHandler = (e: MouseEvent) => {
         console.error("Error sending shape update ws message", e);
       }
     }
-    this.streamingShapeId = null;
-    this.clearCanvas();
-  }
+  this.streamingShapeId = null;
+  this.clearCanvas();
+  this.clicked = false;
+  this.isDraggingCanvas = false;
+}
 };
 
 mouseWheelHandler = (e: WheelEvent) => {
@@ -1734,6 +1901,17 @@ mouseWheelHandler = (e: WheelEvent) => {
 };
 
 mouseMoveHandler = (e: MouseEvent) => {
+  if (this.isDraggingCanvas) {
+    const dx = e.clientX - this.lastMouseX;
+    const dy = e.clientY - this.lastMouseY;
+    this.panX += dx;
+    this.panY += dy;
+    this.lastMouseX = e.clientX;
+    this.lastMouseY = e.clientY;
+    this.clearCanvas();
+    return;
+  }
+
   const { x, y } = this.transformPanScale(e.clientX, e.clientY);
 
   if (this.activeTool === "selection") {
@@ -2060,23 +2238,6 @@ mouseMoveHandler = (e: MouseEvent) => {
       case "eraser":
         this.eraser(x, y);
         break;
-
-      case "grab":
-        const { x: transformedX, y: transformedY } = this.transformPanScale(
-          e.clientX,
-          e.clientY
-        );
-        const { x: startTransformedX, y: startTransformedY } =
-          this.transformPanScale(this.startX, this.startY);
-
-        const deltaX = transformedX - startTransformedX;
-        const deltaY = transformedY - startTransformedY;
-
-        this.panX += deltaX * this.scale;
-        this.panY += deltaY * this.scale;
-        this.startX = e.clientX;
-        this.startY = e.clientY;
-        this.clearCanvas();
     }
     if (streamingShape && !this.isStandalone) {
       this.streamShape(streamingShape);
@@ -2216,15 +2377,11 @@ touchEndHandler = (e: TouchEvent) => {
     });
   };
 
+  // NOTE: The definitive 'input' and 'keydown' listeners are registered
+  // below (after `save` is defined) so they also have access to `save`.
+  // We trigger resizeTextarea here via a dedicated input listener only.
   textarea.addEventListener("input", () => {
-    hasUnsavedChanges = true;
     resizeTextarea();
-  });
-  textarea.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      hasUnsavedChanges = true;
-      resizeTextarea();
-    }
   });
 
   let saveCalled = false;
@@ -2290,7 +2447,10 @@ touchEndHandler = (e: TouchEvent) => {
   });
 
   textarea.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+    if (e.key === "Enter" && !e.ctrlKey && !e.metaKey) {
+      // Plain Enter: only resize (already handled above)
+      resizeTextarea();
+    } else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       save();
     }
@@ -2667,9 +2827,11 @@ isPointInShape(x: number, y: number, shape: Shape): boolean {
 
     case "text": {
       const startX = shape.x;
-      const endX = shape.x + shape.width;
+      const endX = shape.x + (shape.width || 0);
       const startY = shape.y;
-      const textHeight = FONT_SIZE_MAP[shape.fontSize];
+      // Use the stored shape.height (actual multi-line rendered height);
+      // fall back to the single-line FONT_SIZE_MAP value only when height is missing.
+      const textHeight = shape.height || FONT_SIZE_MAP[shape.fontSize];
       const endY = shape.y + textHeight;
 
       return (
@@ -3175,29 +3337,6 @@ eraser(x: number, y: number) {
   }
 }
 
-destroy() {
-  this.canvas.removeEventListener("mousedown", this.mouseDownHandler);
-  this.canvas.removeEventListener("mousemove", this.mouseMoveHandler);
-  this.canvas.removeEventListener("mouseup", this.mouseUpHandler);
-  this.canvas.removeEventListener("wheel", this.mouseWheelHandler);
-  this.canvas.removeEventListener("touchstart", this.touchStartHandler);
-  this.canvas.removeEventListener("touchmove", this.touchMoveHandler);
-  this.canvas.removeEventListener("touchend", this.touchEndHandler);
-
-  if (this.socket?.readyState === WebSocket.OPEN) {
-    this.socket.send(
-      JSON.stringify({
-        type: WsDataType.LEAVE,
-        roomId: this.roomId,
-      })
-    );
-  }
-  this.socket?.close();
-  this.socket = null;
-
-  if (this.flushInterval) clearInterval(this.flushInterval);
-}
-
 onScaleChange(scale: number) {
   this.outputScale = scale;
   if (this.onScaleChangeCallback) {
@@ -3237,6 +3376,7 @@ handleResize(width: number, height: number) {
 
   this.clearCanvas();
 }
+
 
   public getExistingShape(id: string): Shape | undefined {
   return this.existingShapes.find((shape) => shape.id === id);
@@ -3870,7 +4010,20 @@ public ungroupSelected() {
   }
 
   private syncAllShapes() {
-}
+    if (this.isStandalone || !this.isConnected || !this.roomId) return;
+    this.existingShapes.forEach(shape => {
+      try {
+        this.sendMessage(JSON.stringify({
+          type: WsDataType.UPDATE,
+          id: shape.id,
+          message: shape,
+          roomId: this.roomId,
+        }));
+      } catch (e) {
+        console.error("[syncAllShapes] failed to broadcast shape", shape.id, e);
+      }
+    });
+  }
 
   public exportToPNG() {
   if (this.existingShapes.length === 0) return;
@@ -3982,8 +4135,8 @@ public ungroupSelected() {
   }
 
   private rebuildFromYjs() {
-    this.cachedShapes = this.yOrder.toArray().map(id => this.yShapes.get(id)).filter(Boolean) as Shape[];
-    this.spatialIndex.updateIndex(this.cachedShapes);
+    this.existingShapes = this.yOrder.toArray().map(id => this.yShapes.get(id)).filter(Boolean) as Shape[];
+    this.spatialIndex.updateIndex(this.existingShapes);
     this.clearCanvas();
     this.notifyShapeCountChange();
     this.onHistoryChange?.(
@@ -4010,9 +4163,9 @@ public ungroupSelected() {
    * Wraps all mutations in a single Yjs transaction for CRDT safety.
    */
   public rotateGroup(groupId: string, deltaAngle: number) {
-    const members = this.groupManager.getMembersOf(groupId, this.cachedShapes);
+    const members = this.groupManager.getMembersOf(groupId, this.existingShapes);
     if (members.length === 0) return;
-    this.groupManager.applyGroupRotation(groupId, this.cachedShapes, deltaAngle);
+    this.groupManager.applyGroupRotation(groupId, this.existingShapes, deltaAngle);
     this.yDoc.transact(() => {
       members.forEach(shape => {
         if (shape.id) this.yShapes.set(shape.id, shape);
@@ -4051,10 +4204,15 @@ public ungroupSelected() {
    * Used for restoring from local storage or snapshots.
    */
   public applyEncodedState(update: Uint8Array) {
-    Y.applyUpdate(this.yDoc, update, "recovery");
-    this.rebuildFromYjs();
-    this.rebuildGroupDescriptors();
-    this.clearCanvas();
+    if (!update || update.length === 0) return;
+    try {
+      Y.applyUpdate(this.yDoc, update, "recovery");
+      this.rebuildFromYjs();
+      this.rebuildGroupDescriptors();
+      this.clearCanvas();
+    } catch (e) {
+      console.error("Critical error applying Yjs update. The binary state might be corrupt.", e);
+    }
   }
 
   public getLayers() { return this.layerManager.getLayers(); }
@@ -4064,25 +4222,20 @@ public ungroupSelected() {
   public toggleLayerLock(id: string) { this.layerManager.toggleLock(id); }
   public reorderLayers(layerIds: string[]) { this.layerManager.reorderLayers(layerIds); this.clearCanvas(); }
   public deleteLayer(id: string) {
-    this.layerManager.deleteLayer(id, this.cachedShapes, (shape) => {
+    this.layerManager.deleteLayer(id, this.existingShapes, (shape) => {
       if (shape.id) this.yShapes.set(shape.id, shape);
     });
   }
   public moveShapeToLayer(shapeId: string, layerId: string) {
-    const shape = this.cachedShapes.find(s => s.id === shapeId);
+    const shape = this.existingShapes.find((s: Shape) => s.id === shapeId);
     if (!shape) return;
-    this.layerManager.moveShapeToLayer(shape, layerId, (s) => {
+    this.layerManager.moveShapeToLayer(shape, layerId, (s: Shape) => {
       if (s.id) this.yShapes.set(s.id, s);
     });
   }
   public setLayerChangeCallback(cb: (layers: import("./LayerManager").Layer[]) => void) {
     this.layerManager.onChange = cb;
   }
-
-  public get existingShapes(): Shape[] {
-    return this.cachedShapes;
-  }
-
   private _addShapeToCRDT(shape: Shape) {
     this.yDoc.transact(() => {
       if (shape.id) {
@@ -4132,19 +4285,5 @@ public ungroupSelected() {
       });
     }, this.connectionId || "local");
   }
-
-  /**
-   * Phase 4: Persistence - Encodes the entire Yjs document as a binary update blob.
-   * This is stored in the database's encryptedData field.
-   */
-  public getEncodedState(): Uint8Array {
-    return Y.encodeStateAsUpdate(this.yDoc);
-  }
-
-  /**
-   * Phase 4: Persistence - Decodes and applies a binary Yjs document state.
-   */
-  public applyEncodedState(update: Uint8Array) {
-    Y.applyUpdate(this.yDoc, update);
-  }
 }
+

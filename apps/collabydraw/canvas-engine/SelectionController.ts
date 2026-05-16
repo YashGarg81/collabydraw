@@ -179,17 +179,19 @@ export class SelectionController {
           break;
 
         case "line":
-        case "arrow":
+        case "arrow": {
           const minX = Math.min(shape.x, shape.toX);
           const minY = Math.min(shape.y, shape.toY);
           const maxX = Math.max(shape.x, shape.toX);
           const maxY = Math.max(shape.y, shape.toY);
+          const sw = shape.strokeWidth || 1; // guard: strokeWidth is optional
 
-          bounds.x = minX - shape.strokeWidth - 20;
-          bounds.y = minY - shape.strokeWidth - 20;
-          bounds.width = maxX - minX + shape.strokeWidth * 2 + 40;
-          bounds.height = maxY - minY + shape.strokeWidth * 2 + 40;
+          bounds.x = minX - sw - 20;
+          bounds.y = minY - sw - 20;
+          bounds.width = maxX - minX + sw * 2 + 40;
+          bounds.height = maxY - minY + sw * 2 + 40;
           break;
+        }
 
         case "text":
           const calFontSize = getFontSize(shape.fontSize, 100);
