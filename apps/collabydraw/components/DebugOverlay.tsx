@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState, useRef } from "react";
 import { CanvasEngine } from "@/canvas-engine/CanvasEngine";
-import { Bug, Activity, Zap, Maximize, Target } from "lucide-react";
+import { Bug, Activity, Zap, Maximize, Target, Save } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface DebugOverlayProps {
@@ -17,6 +17,7 @@ export function DebugOverlay({ engine }: DebugOverlayProps) {
   const [shapeCount, setShapeCount] = useState(0);
   const [visibleCount, setVisibleCount] = useState(0);
   const [memory, setMemory] = useState<number | null>(null);
+  const [lastSave, setLastSave] = useState<{ status: string, size: number, time: number } | null>(null);
 
   const frameCountRef = useRef(0);
   const lastTimeRef = useRef(performance.now());
@@ -43,6 +44,14 @@ export function DebugOverlay({ engine }: DebugOverlayProps) {
         if (perf.memory) {
           setMemory(Math.round(perf.memory.usedJSHeapSize / (1024 * 1024)));
         }
+
+        // Diagnostics: Doc size
+        const state = engine.getEncodedState();
+        setLastSave(prev => ({
+          status: prev?.status || "Idle",
+          size: state.length,
+          time: prev?.time || 0
+        }));
       }
 
       // Hack to grab render time from the engine if we exposed it, but we can just measure here roughly
@@ -103,6 +112,13 @@ export function DebugOverlay({ engine }: DebugOverlayProps) {
           <div className="flex justify-between items-center">
             <span className="text-white/50 flex items-center gap-1.5"><Maximize className="w-3 h-3"/> Memory (Heap)</span>
             <span>{memory} MB</span>
+          </div>
+        )}
+
+        {lastSave && (
+          <div className="flex justify-between items-center">
+            <span className="text-white/50 flex items-center gap-1.5"><Save className="w-3 h-3"/> Doc Size (Binary)</span>
+            <span>{(lastSave.size / 1024).toFixed(1)} KB</span>
           </div>
         )}
       </div>

@@ -36,8 +36,8 @@ import { VersionHistory } from "../VersionHistory";
 import { LiveCursors, useRemoteCursors } from "../LiveCursors";
 import { LayersPanel } from "../LayersPanel";
 import { Rulers } from "../Rulers";
-import { CommentThread } from "./CommentThread";
 import { DebugOverlay } from "../DebugOverlay";
+import { RecoveryManager } from "../RecoveryManager";
 
 export default function CanvasBoard() {
     const { data: session, status } = useSession();
@@ -71,6 +71,9 @@ export default function CanvasBoard() {
     const [boardName, setBoardName] = useState("Untitled Board");
     // ── Phase 5: Version history + live cursors ─────────────────────────────
     const [versionHistoryOpen, setVersionHistoryOpen] = useState(false);
+    // ── Phase 6: Recovery State ──────────────────────────────────────────────
+    const [localSnapshot, setLocalSnapshot] = useState<{data: string, ts: number} | null>(null);
+    const [serverTimestamp, setServerTimestamp] = useState<number>(0);
     // ── Phase 2: Layers + Rulers ─────────────────────────────────────────────
     const [layersOpen, setLayersOpen] = useState(false);
     const [showRulers, setShowRulers] = useState(false);
@@ -312,20 +315,25 @@ export default function CanvasBoard() {
             setCanUndo(undoable);
             setCanRedo(redoable);
         };
-        engine.setOnShapeCountChange((count: number) => {
-            setCanvasEngineState(prev => ({
-                ...prev,
-                isCanvasEmpty: count === 0
-            }));
-            // Sync shapes for minimap
-            setCanvasShapes(engine.getShapes());
-            // Trigger autosave
+
+        const triggerAutosave = () => {
             if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
             autosaveTimerRef.current = setTimeout(async () => {
                 const bid = new URLSearchParams(window.location.search).get('board');
                 if (!bid) return;
+
                 const shapes = engine.getShapes();
-                const encryptedData = uint8ArrayToBase64(engine.getEncodedState());
+                const binaryState = engine.getEncodedState();
+                const encryptedData = uint8ArrayToBase64(binaryState);
+
+                // 1. Local Fallback Persistence (O(1) async write)
+                try {
+                    localStorage.setItem(`board_local_${bid}`, JSON.stringify({
+                        data: encryptedData,
+                        ts: Date.now()
+                    }));
+                } catch (e) { console.warn("Local storage full, skipping local fallback", e); }
+
                 setSaveStatus('saving');
                 try {
                     const res = await fetch(`/api/boards/${bid}`, {
@@ -348,6 +356,19 @@ export default function CanvasBoard() {
                     else setSaveStatus('error');
                 } catch { setSaveStatus('error'); }
             }, 2000);
+        };
+
+        engine.onDocumentChange = () => {
+            // Sync shapes for minimap on every change
+            setCanvasShapes(engine.getShapes());
+            triggerAutosave();
+        };
+
+        engine.setOnShapeCountChange((count: number) => {
+            setCanvasEngineState(prev => ({
+                ...prev,
+                isCanvasEmpty: count === 0
+            }));
         });
         engine.setOnSelectionChange((isSelected: boolean, count?: number, isGrouped?: boolean) => {
             setCanvasEngineState(prev => ({
@@ -442,6 +463,16 @@ export default function CanvasBoard() {
         const bid = new URLSearchParams(window.location.search).get('board');
         if (!bid || !canvasEngineState.engine) return;
         setBoardId(bid);
+
+        // Check local storage for newer data
+        try {
+            const local = localStorage.getItem(`board_local_${bid}`);
+            if (local) {
+                const parsed = JSON.parse(local);
+                setLocalSnapshot(parsed);
+            }
+        } catch (e) { console.error("Error reading recovery data", e); }
+
         fetch(`/api/boards/${bid}`).then(async res => {
             if (res.ok) {
                 const data = await res.json();
@@ -449,6 +480,10 @@ export default function CanvasBoard() {
                 if (data.board?.isPublic !== undefined) setBoardIsPublic(data.board.isPublic);
                 if (data.board?.publicRole !== undefined) setBoardPublicRole(data.board.publicRole);
                 
+                // Track server timestamp (from DB updatedAt)
+                const sTs = data.board?.updatedAt ? new Date(data.board.updatedAt).getTime() : 0;
+                setServerTimestamp(sTs);
+
                 // Phase 4: Persistence - Load from binary blob (Yjs) or legacy JSON
                 if (data.board?.encryptedData && canvasEngineState.engine) {
                     try {
@@ -995,6 +1030,25 @@ export default function CanvasBoard() {
             )}
 
             <DebugOverlay engine={canvasEngineState.engine} />
+
+            {/* Phase 6: Recovery UI */}
+            <RecoveryManager 
+                boardId={boardId}
+                localVersion={localSnapshot?.data || null}
+                localTimestamp={localSnapshot?.ts || 0}
+                serverTimestamp={serverTimestamp}
+                onRecover={(data) => {
+                    if (canvasEngineState.engine) {
+                        const binary = base64ToUint8Array(data);
+                        canvasEngineState.engine.applyEncodedState(binary);
+                    }
+                    setLocalSnapshot(null); // Clear after restore
+                }}
+                onDiscard={() => {
+                    if (boardId) localStorage.removeItem(`board_local_${boardId}`);
+                    setLocalSnapshot(null);
+                }}
+            />
         </div>
     )
 };

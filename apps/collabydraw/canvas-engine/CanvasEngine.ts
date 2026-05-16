@@ -217,7 +217,8 @@ export class CanvasEngine {
 
   public onViewChange?: (embeds: Shape[], panX: number, panY: number, scale: number) => void;
   public onToolChangeCallback?: (tool: ToolType) => void;
-  // Phase 5: cursor presence overlay
+  // Phase 2: Persistence & Recovery
+  public onDocumentChange?: () => void;
   public onCursorUpdate?: (userId: string, userName: string, x: number, y: number) => void;
 
   public triggerViewChange() {
@@ -291,6 +292,13 @@ export class CanvasEngine {
     });
     this.yUndoManager.on("stack-item-popped", () => {
       this.rebuildFromYjs();
+    });
+
+    // Phase 6: Persistence hook - Listen to any CRDT update
+    this.yDoc.on('update', () => {
+      if (this.onDocumentChange) {
+        this.onDocumentChange();
+      }
     });
 
     this.canvas.width = document.body.clientWidth;
@@ -4286,6 +4294,25 @@ public ungroupSelected() {
   // ─────────────────────────────────────────────
   // Phase 6: Layer management public API
   // ─────────────────────────────────────────────
+
+  /**
+   * Phase 6: Persistence & Recovery
+   * Returns the entire document state as a Uint8Array (Yjs binary format)
+   */
+  public getEncodedState(): Uint8Array {
+    return Y.encodeStateAsUpdate(this.yDoc);
+  }
+
+  /**
+   * Applies a binary state update to the current document.
+   * Used for restoring from local storage or snapshots.
+   */
+  public applyEncodedState(update: Uint8Array) {
+    Y.applyUpdate(this.yDoc, update, "recovery");
+    this.rebuildFromYjs();
+    this.rebuildGroupDescriptors();
+    this.clearCanvas();
+  }
 
   public getLayers() { return this.layerManager.getLayers(); }
   public createLayer(name: string) { return this.layerManager.createLayer(name); }
