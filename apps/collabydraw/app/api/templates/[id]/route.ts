@@ -10,7 +10,19 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const template = await client.template.findUnique({ where: { id } });
+  const template = await client.template.findUnique({ 
+    where: { id },
+    include: {
+      author: {
+        select: {
+          id: true,
+          name: true,
+          image: true,
+        }
+      }
+    }
+  });
+  
   if (!template) {
     return NextResponse.json({ error: "Template not found" }, { status: 404 });
   }
@@ -31,6 +43,29 @@ export async function POST(
   const template = await client.template.findUnique({ where: { id } });
   if (!template) {
     return NextResponse.json({ error: "Template not found" }, { status: 404 });
+  }
+
+  // Phase 7: Paid Template Check
+  if (template.isPaid && template.authorId !== session.user.id) {
+    const purchase = await client.templatePurchase.findUnique({
+      where: {
+        templateId_userId: {
+          templateId: id,
+          userId: session.user.id
+        }
+      }
+    });
+
+    if (!purchase) {
+      return NextResponse.json(
+        { 
+          error: "PAYMENT_REQUIRED", 
+          message: "You must purchase this template before using it.",
+          price: template.price 
+        }, 
+        { status: 402 }
+      );
+    }
   }
 
   // Plan enforcement — same limit as creating a blank board
@@ -61,6 +96,12 @@ export async function POST(
       ownerId: session.user.id,
       shapes: template.shapes,
     },
+  });
+
+  // Phase 7: Increment download count
+  await client.template.update({
+    where: { id: template.id },
+    data: { downloads: { increment: 1 } }
   });
 
   return NextResponse.json({ board }, { status: 201 });

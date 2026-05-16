@@ -18,11 +18,19 @@ export async function GET(req: NextRequest) {
 
   const templates = await client.template.findMany({
     where: {
-      isPublic: true,
       ...(category && category !== "all" ? { category } : {}),
       ...(q ? { name: { contains: q } } : {}),
     },
-    orderBy: [{ usageCount: "desc" }, { createdAt: "desc" }],
+    include: {
+      author: {
+        select: {
+          id: true,
+          name: true,
+          image: true,
+        }
+      }
+    },
+    orderBy: [{ downloads: "desc" }, { createdAt: "desc" }],
   });
 
   // Group by category for the gallery UI
@@ -45,9 +53,52 @@ export async function GET(req: NextRequest) {
         tags: [], // Tags currently not in DB but can be added if needed
         previewColor: "from-violet-600/30 to-indigo-600/20", // Default color
         shapeCount,
+        price: t.price,
+        isPaid: t.isPaid,
+        downloads: t.downloads,
+        author: {
+          name: t.author?.name || "Anonymous",
+          id: t.authorId,
+          image: t.author?.image
+        }
       };
     }),
   }));
+
+  // Add trending category (top 4 templates by downloads overall)
+  const trendingTemplates = [...templates]
+    .sort((a, b) => b.downloads - a.downloads)
+    .slice(0, 4)
+    .map(t => {
+      let shapeCount = 0;
+      try { shapeCount = t.shapes ? JSON.parse(t.shapes).length : 0; } catch (e) {}
+      return {
+        id: t.id,
+        name: t.name,
+        description: t.description,
+        category: t.category,
+        tags: [],
+        previewColor: "from-fuchsia-600/30 to-pink-600/20",
+        shapeCount,
+        price: t.price,
+        isPaid: t.isPaid,
+        downloads: t.downloads,
+        author: {
+          name: t.author?.name || "Anonymous",
+          id: t.authorId,
+          image: t.author?.image
+        }
+      };
+    });
+
+  if (trendingTemplates.length > 0 && category === "all" && !q) {
+    groupedCategories.unshift({
+      category: "trending",
+      label: "Trending",
+      emoji: "🔥",
+      templates: trendingTemplates
+    });
+  }
 
   return NextResponse.json({ categories: groupedCategories, total: templates.length });
 }

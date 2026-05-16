@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useSession } from "next-auth/react";
 import {
   Sparkles, Search, ArrowLeft, LayoutGrid, Loader2,
-  ChevronRight, Star, Lock, Zap, CheckCircle2
+  ChevronRight, Star, Lock, Zap, CheckCircle2, Download
 } from "lucide-react";
 import { TEMPLATE_CATEGORIES, type TemplateCategory } from "@/data/templates";
 
@@ -18,6 +18,14 @@ interface TemplateMeta {
   tags: string[];
   previewColor: string;
   shapeCount: number;
+  price: number;
+  isPaid: boolean;
+  downloads: number;
+  author: {
+    id: string;
+    name: string;
+    image?: string;
+  };
 }
 
 interface CategoryGroup {
@@ -36,7 +44,7 @@ function TemplatePreview({ color, shapeCount, emoji }: { color: string; shapeCou
     r: 6 + (i % 3) * 3,
   }));
   return (
-    <div className={`relative w-full h-36 rounded-xl bg-gradient-to-br ${color} overflow-hidden`}>
+    <div className={`relative w-full h-36 rounded-t-xl bg-gradient-to-br ${color} overflow-hidden`}>
       <div className="absolute inset-0 opacity-30">
         <svg width="100%" height="100%" viewBox="0 0 220 144" preserveAspectRatio="xMidYMid meet">
           {circles.map((c, i) => (
@@ -65,7 +73,8 @@ function TemplateCard({ t, onUse }: { t: TemplateMeta; onUse: (id: string) => vo
   const [done, setDone] = useState(false);
   const catMeta = TEMPLATE_CATEGORIES[t.category as TemplateCategory];
 
-  const handleUse = async () => {
+  const handleUse = async (e: React.MouseEvent) => {
+    e.preventDefault();
     setLoading(true);
     await onUse(t.id);
     setDone(true);
@@ -73,49 +82,65 @@ function TemplateCard({ t, onUse }: { t: TemplateMeta; onUse: (id: string) => vo
   };
 
   return (
-    <div className="group flex flex-col rounded-2xl border border-white/8 bg-[#0d0d16] hover:border-violet-500/30 hover:bg-[#11111c] transition-all duration-300 overflow-hidden shadow-lg hover:shadow-violet-500/10">
-      <TemplatePreview color={t.previewColor} shapeCount={t.shapeCount} emoji={catMeta?.emoji} />
+    <Link href={`/templates/${t.id}`} className="group flex flex-col rounded-2xl border border-white/8 bg-[#0d0d16] hover:border-violet-500/30 hover:bg-[#11111c] transition-all duration-300 overflow-hidden shadow-lg hover:shadow-violet-500/10">
+      <TemplatePreview color={t.previewColor} shapeCount={t.shapeCount} emoji={catMeta?.emoji || "📄"} />
 
       <div className="flex flex-col flex-1 p-4 gap-3">
-        {/* Category badge */}
-        <div className="flex items-center gap-2">
+        {/* Header line: Category + Price */}
+        <div className="flex items-center justify-between">
           <span className="text-[10px] px-2 py-0.5 rounded-full bg-violet-500/12 border border-violet-500/20 text-violet-400 font-medium uppercase tracking-wider">
-            {catMeta?.emoji} {catMeta?.label}
+            {catMeta?.emoji || "📄"} {catMeta?.label || t.category}
           </span>
+          {t.isPaid ? (
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/12 border border-emerald-500/20 text-emerald-400 font-bold tracking-wider">
+              ${t.price.toFixed(2)}
+            </span>
+          ) : (
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/5 border border-white/10 text-white/60 font-medium tracking-wider">
+              FREE
+            </span>
+          )}
         </div>
 
         <div className="flex-1">
-          <h3 className="text-sm font-semibold text-white mb-1">{t.name}</h3>
+          <h3 className="text-sm font-semibold text-white mb-1 group-hover:text-violet-300 transition-colors">{t.name}</h3>
           <p className="text-xs text-white/40 leading-relaxed line-clamp-2">{t.description}</p>
         </div>
 
-        {/* Tags */}
-        <div className="flex flex-wrap gap-1">
-          {t.tags.map(tag => (
-            <span key={tag} className="text-[9px] px-1.5 py-0.5 rounded-md bg-white/5 text-white/30 border border-white/5">
-              {tag}
-            </span>
-          ))}
+        {/* Creator & Downloads */}
+        <div className="flex items-center justify-between mt-1 pt-3 border-t border-white/5">
+          <div className="flex items-center gap-2">
+            <div className="w-5 h-5 rounded-full bg-gradient-to-br from-violet-500 to-indigo-500 flex items-center justify-center text-[8px] font-bold text-white overflow-hidden">
+              {t.author?.image ? <img src={t.author.image} alt={t.author.name} className="w-full h-full object-cover" /> : t.author?.name?.charAt(0) || "A"}
+            </div>
+            <span className="text-[10px] text-white/50 truncate max-w-[100px]">{t.author?.name || "Anonymous"}</span>
+          </div>
+          <div className="flex items-center gap-1 text-white/30">
+            <Download className="w-3 h-3" />
+            <span className="text-[10px] font-medium">{t.downloads}</span>
+          </div>
         </div>
 
-        {/* Action */}
-        <button
-          onClick={handleUse}
-          disabled={loading || done}
-          className="w-full flex items-center justify-center gap-2 py-2 rounded-xl text-xs font-semibold transition-all
-            bg-violet-600 hover:bg-violet-500 text-white shadow-lg shadow-violet-500/20 hover:shadow-violet-500/35
-            disabled:opacity-60 disabled:cursor-not-allowed group-hover:scale-[1.01]"
-        >
-          {done ? (
-            <><CheckCircle2 className="w-3.5 h-3.5" /> Opening board…</>
-          ) : loading ? (
-            <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Creating…</>
-          ) : (
-            <><Zap className="w-3.5 h-3.5" /> Use Template</>
-          )}
-        </button>
+        {/* Action (Only for free templates, otherwise clicking goes to details) */}
+        {!t.isPaid && (
+          <button
+            onClick={handleUse}
+            disabled={loading || done}
+            className="w-full mt-2 flex items-center justify-center gap-2 py-2 rounded-xl text-xs font-semibold transition-all
+              bg-violet-600/20 hover:bg-violet-600 text-violet-300 hover:text-white border border-violet-500/30 hover:border-violet-500
+              disabled:opacity-60 disabled:cursor-not-allowed group-hover:scale-[1.01]"
+          >
+            {done ? (
+              <><CheckCircle2 className="w-3.5 h-3.5" /> Opening…</>
+            ) : loading ? (
+              <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Creating…</>
+            ) : (
+              <><Zap className="w-3.5 h-3.5" /> Use Template</>
+            )}
+          </button>
+        )}
       </div>
-    </div>
+    </Link>
   );
 }
 

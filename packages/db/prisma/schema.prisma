@@ -55,6 +55,10 @@ model User {
   subscriptions Subscription[]
   aiUsageLogs   AiUsage[]
 
+  // Phase 7: Template Marketplace
+  templates     Template[]         @relation("CreatedTemplates")
+  purchases     TemplatePurchase[] @relation("TemplatePurchases")
+
   apiKeys       ApiKey[]
   webhooks      Webhook[]
   integrations  Integration[]
@@ -185,18 +189,35 @@ model FolderBoard {
   @@id([folderId, boardId])
 }
 
-// Phase 4: Template Gallery
+// Phase 7: Template Marketplace
 model Template {
-  id          String  @id @default(cuid())
+  id          String   @id @default(cuid())
   name        String
-  description String?
-  category    String  @default("general") // general | wireframe | mindmap | retro | kanban | flowchart | org
-  preview     String? // URL or base64 thumbnail
-  shapes      String  @default("[]") // JSON stringified shapes
-  isPublic    Boolean @default(true)
-  usageCount  Int     @default(0)
+  description String
+  category    String   @default("general")
+  thumbnail   String?
+  shapes      String   @default("[]") // JSON stringified shapes
+  price       Float    @default(0)
+  isPaid      Boolean  @default(false)
+  authorId    String
+  author      User     @relation("CreatedTemplates", fields: [authorId], references: [id], onDelete: Cascade)
+  downloads   Int      @default(0)
+  createdAt   DateTime @default(now())
 
-  createdAt DateTime @default(now())
+  purchases   TemplatePurchase[]
+}
+
+model TemplatePurchase {
+  id         String   @id @default(cuid())
+  templateId String
+  userId     String
+  price      Float
+  createdAt  DateTime @default(now())
+
+  template   Template @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  user       User     @relation("TemplatePurchases", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([templateId, userId])
 }
 
 // Phase 4: Board Invites

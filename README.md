@@ -10,9 +10,9 @@
 
 ---
 
-## 🌟 What's New? (The 6-Phase Evolution)
+## 🌟 What's New? (The 7-Phase Evolution)
 
-We have recently completed a massive 6-phase development roadmap, transforming CollabyDraw into a full-featured SaaS platform:
+We have recently completed a massive 7-phase development roadmap, transforming CollabyDraw into a full-featured SaaS platform:
 
 ### Phase 1: MVP Foundation & Architecture 🏗️
 - **Next.js 15 (App Router)** powering a monolithic fullstack architecture.
@@ -53,15 +53,23 @@ We have recently completed a massive 6-phase development roadmap, transforming C
 - **Native Canvas Integrations:** Drop GitHub and Jira URLs onto the canvas to spawn live, syncing smart cards.
 - **Web Embeds:** Notion/Confluence unfurling via oEmbed, and a secure `/embed/[id]` iframe view.
 
+### Phase 7: Template Marketplace 🛍️
+- **Template Browser:** Beautiful gallery featuring categorized, trending, and featured templates.
+- **Creator Portfolios:** Public profile pages (`/creators/[id]`) showcasing a creator's published templates, total downloads, and affiliate codes.
+- **Monetization & Checkout:** Paid premium templates ($1–$20) with a seamless, Stripe-ready mock checkout system.
+- **SEO & Growth:** Google-discoverable, dynamically generated static detail pages for every template.
+- **Viral Growth Engine:** "Use Template" functionality that instantly forks predefined structures directly into the user's dashboard.
+
 ---
 
 ## ⚙️ Tech Stack
 
 - **Frontend & API Framework:** Next.js 15 (App Router), React, TypeScript
 - **Styling:** Tailwind CSS, Radix UI (shadcn)
-- **Database & ORM:** PostgreSQL, Prisma
+- **Database & ORM:** SQLite/PostgreSQL, Prisma
 - **Real-Time Sync:** Yjs (CRDT), WebSockets (ws)
 - **Generative AI:** Google Gemini API
+- **Monetization:** Stripe (Mocked for Templates/Subscriptions)
 - **Canvas:** Native HTML5 Canvas API + Custom Rendering Engine
 
 ---
