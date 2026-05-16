@@ -12,6 +12,8 @@ import {
   TextAlign,
   ToolType,
 } from "@/types/canvas";
+import { getCollaboratorColor, type CursorState } from "../utils/collaboratorUtils";
+import { TransformEngine } from "./TransformEngine";
 import { SelectionController } from "./SelectionController";
 import { v4 as uuidv4 } from "uuid";
 import * as Y from "yjs";
@@ -191,10 +193,9 @@ export class CanvasEngine {
   private remoteStreamingShapes: Map<string, Shape> = new Map();
 
   private cursorThrottleTimeout: number | null = null;
-  private remoteCursors: Map<
-    string,
-    { x: number; y: number; userId: string; userName: string }
-  > = new Map();
+  private remoteCursors: Map<string, CursorState> = new Map();
+  private presenceAnimFrameId: number | null = null;
+  private presenceLastTick: number = 0;
   /**
    * Stores timestamp of when a remote user last initiated a shape stream (i.e., clicked to draw).
    * Key format: `${userId}-${connectionId}`, value is timestamp (in ms).
@@ -319,11 +320,37 @@ export class CanvasEngine {
       this.sendCursorMove(x, y);
     });
     if (!this.isStandalone && this.token && this.roomId) {
-      // console.log("✅Connecting to WebSocket…");
       this.connectWebSocket();
-      // console.log("✅Connected to WebSocket…");
     }
+
+    // Presence animation loop
+    this.presenceLastTick = performance.now();
+    this.presenceAnimFrameId = requestAnimationFrame(this.animatePresence);
   }
+
+  private animatePresence = (now: number) => {
+    const dt = now - this.presenceLastTick;
+    this.presenceLastTick = now;
+    let needsRedraw = false;
+    const lerpFactor = 0.15;
+
+    this.remoteCursors.forEach((state, key) => {
+      const dx = state.targetX - state.x;
+      const dy = state.targetY - state.y;
+      if (Math.abs(dx) > 0.1 || Math.abs(dy) > 0.1) {
+        state.x += dx * lerpFactor;
+        state.y += dy * lerpFactor;
+        needsRedraw = true;
+      }
+      if (now - state.lastUpdate > 30000) {
+        this.remoteCursors.delete(key);
+        needsRedraw = true;
+      }
+    });
+
+    if (needsRedraw) this.clearCanvas();
+    this.presenceAnimFrameId = requestAnimationFrame(this.animatePresence);
+  };
 
   private connectWebSocket() {
     if (
@@ -395,11 +422,21 @@ export class CanvasEngine {
             if (data.userId !== this.userId && data.message) {
               const coords = JSON.parse(data.message);
               const key = `${data.userId}-${data.connectionId}`;
+              const existing = this.remoteCursors.get(key);
+              
               this.remoteCursors.set(key, {
-                x: coords.x,
-                y: coords.y,
+                x: existing ? existing.x : coords.x,
+                y: existing ? existing.y : coords.y,
+                targetX: coords.x,
+                targetY: coords.y,
                 userId: data.userId,
                 userName: data.userName ?? data.userId,
+                color: getCollaboratorColor(data.userId),
+                lastUpdate: performance.now(),
+                isLaser: coords.isLaser,
+                isEditing: coords.isEditing,
+                selectionIds: coords.selectionIds,
+                viewport: coords.viewport
               });
 
               if (this.followUserId === data.userId) {
@@ -861,28 +898,12 @@ export class CanvasEngine {
 
   clearCanvas() {
     this.ctx.setTransform(this.scale, 0, 0, this.scale, this.panX, this.panY);
-    this.ctx.clearRect(
-      -this.panX / this.scale,
-      -this.panY / this.scale,
-      this.canvas.width / this.scale,
-      this.canvas.height / this.scale
-    );
+    this.ctx.clearRect(-this.panX / this.scale, -this.panY / this.scale, this.canvas.width / this.scale, this.canvas.height / this.scale);
     this.ctx.fillStyle = this.canvasBgColor;
-    this.ctx.fillRect(
-      -this.panX / this.scale,
-      -this.panY / this.scale,
-      this.canvas.width / this.scale,
-      this.canvas.height / this.scale
-    );
+    this.ctx.fillRect(-this.panX / this.scale, -this.panY / this.scale, this.canvas.width / this.scale, this.canvas.height / this.scale);
 
-    // Phase 4: Draw grid if enabled
     if (this.snapEngine.config.gridEnabled) {
-      this.snapEngine.drawGrid(
-        this.ctx,
-        this.panX, this.panY, this.scale,
-        this.canvas.width, this.canvas.height,
-        this.currentTheme === "dark"
-      );
+      this.snapEngine.drawGrid(this.ctx, this.panX, this.panY, this.scale, this.canvas.width, this.canvas.height, this.currentTheme === "dark");
     }
 
     const viewportBounds = {
@@ -893,29 +914,18 @@ export class CanvasEngine {
     };
 
     const shapesToRender = this.spatialIndex.getVisibleShapes(viewportBounds);
-
-    // Phase 6: Apply layer filtering + sort before rendering
     const layerSorted = this.layerManager.filterAndSort(shapesToRender);
 
     layerSorted.forEach((shape: Shape) => {
-      const isBeingStreamed = [...this.remoteStreamingShapes.values()].some(
-        (streamingShape) => streamingShape.id === shape.id
-      );
+      const isBeingStreamed = [...this.remoteStreamingShapes.values()].some(s => s.id === shape.id);
+      if (isBeingStreamed) return;
 
-      if (isBeingStreamed) {
-        return;
-      }
-
-      // Phase 2 UX Polish: Hover Affordance
-      if (
-        this.hoveredShapeId === shape.id && 
-        this.activeTool === "selection" && 
-        !this.SelectionController.getSelectedShapes().find(s => s.id === shape.id)
-      ) {
+      // Hover Affordance
+      if (this.hoveredShapeId === shape.id && this.activeTool === "selection" && !this.SelectionController.getSelectedShapes().find(s => s.id === shape.id)) {
         this.ctx.save();
         TransformEngine.applyTransform(this.ctx, shape);
         const bounds = this.SelectionController.getShapeBounds(shape);
-        this.ctx.strokeStyle = "rgba(105, 101, 219, 0.4)"; // Soft purple hover
+        this.ctx.strokeStyle = "rgba(105, 101, 219, 0.4)";
         this.ctx.lineWidth = 1.5 / this.scale;
         this.ctx.strokeRect(bounds.x - 2, bounds.y - 2, bounds.width + 4, bounds.height + 4);
         this.ctx.restore();
@@ -923,153 +933,14 @@ export class CanvasEngine {
       
       this.ctx.save();
       TransformEngine.applyTransform(this.ctx, shape);
+      this.renderSingleShape(shape);
+      this.ctx.restore();
+    });
 
-      if (shape.type === "rectangle") {
-        this.drawRect(
-          shape.x,
-          shape.y,
-          shape.width,
-          shape.height,
-          shape.strokeWidth || DEFAULT_STROKE_WIDTH,
-          shape.strokeFill || DEFAULT_STROKE_FILL,
-          shape.bgFill || DEFAULT_BG_FILL,
-          shape.rounded,
-          shape.strokeStyle,
-          shape.roughStyle,
-          shape.fillStyle
-        );
-      } else if (shape.type === "ellipse") {
-        this.drawEllipse(
-          shape.x,
-          shape.y,
-          shape.radX,
-          shape.radY,
-          shape.strokeWidth || DEFAULT_STROKE_WIDTH,
-          shape.strokeFill || DEFAULT_STROKE_FILL,
-          shape.bgFill || DEFAULT_BG_FILL,
-          shape.strokeStyle,
-          shape.roughStyle,
-          shape.fillStyle
-        );
-      } else if (shape.type === "diamond") {
-        this.drawDiamond(
-          shape.x,
-          shape.y,
-          shape.width,
-          shape.height,
-          shape.strokeWidth || DEFAULT_STROKE_WIDTH,
-          shape.strokeFill || DEFAULT_STROKE_FILL,
-          shape.bgFill || DEFAULT_BG_FILL,
-          shape.rounded,
-          shape.strokeStyle,
-          shape.roughStyle,
-          shape.fillStyle
-        );
-      } else if (shape.type === "line") {
-        this.drawLine(
-          shape.x,
-          shape.y,
-          shape.toX,
-          shape.toY,
-          shape.strokeWidth || DEFAULT_STROKE_WIDTH,
-          shape.strokeFill || DEFAULT_STROKE_FILL,
-          shape.strokeStyle,
-          shape.roughStyle,
-          false
-        );
-      } else if (shape.type === "arrow") {
-        this.drawLine(
-          shape.x,
-          shape.y,
-          shape.toX,
-          shape.toY,
-          shape.strokeWidth || DEFAULT_STROKE_WIDTH,
-          shape.strokeFill || DEFAULT_STROKE_FILL,
-          shape.strokeStyle,
-          shape.roughStyle,
-          true
-        );
-      } else if (shape.type === "free-draw") {
-        this.drawFreeDraw(
-          shape.points,
-          shape.strokeFill,
-          shape.bgFill,
-          shape.strokeStyle,
-          shape.fillStyle,
-          shape.strokeWidth
-        );
-      } else if (shape.type === "text") {
-        this.drawText(
-          shape.x,
-          shape.y,
-          shape.width,
-          shape.height,
-          shape.text,
-          shape.strokeFill,
-          shape.fontStyle,
-          shape.fontFamily,
-          shape.fontSize,
-          shape.textAlign
-        );
-      } else if (shape.type === "sticky") {
-        this.drawRect(
-          shape.x,
-          shape.y,
-          shape.width,
-          shape.height,
-          2, // subtle stroke
-          shape.strokeFill,
-          shape.bgFill,
-          shape.rounded,
-          shape.strokeStyle,
-          shape.roughStyle,
-          "solid"
-        );
-        this.drawText(
-          shape.x,
-          shape.y,
-          shape.width,
-          shape.height,
-          shape.text,
-          shape.strokeFill,
-          shape.fontStyle,
-          shape.fontFamily,
-          shape.fontSize,
-          shape.textAlign
-        );
-      } else if (shape.type === "image") {
-        this.drawImageShape(shape);
-      } else if (shape.type === "frame") {
-        this.ctx.save();
-        this.ctx.strokeStyle = "#a5a5a5";
-        this.ctx.lineWidth = 2;
-        this.ctx.setLineDash([6, 3]);
-        this.ctx.strokeRect(shape.x, shape.y, shape.width, shape.height);
-        this.ctx.setLineDash([]);
-        this.ctx.fillStyle = "#a5a5a5";
-        this.ctx.font = "bold 13px sans-serif";
-        this.ctx.textBaseline = "bottom";
-        this.ctx.fillText(shape.frameName, shape.x, shape.y - 6);
-        this.ctx.restore();
-      } else if (shape.type === "embed") {
-        this.ctx.save();
-        this.ctx.fillStyle = "#f1f3f5";
-        this.ctx.strokeStyle = "#ced4da";
-        this.ctx.lineWidth = 1;
-        this.ctx.fillRect(shape.x, shape.y, shape.width, shape.height);
-        this.ctx.strokeRect(shape.x, shape.y, shape.width, shape.height);
-        this.ctx.fillStyle = "#868e96";
-        this.ctx.font = "14px sans-serif";
-        this.ctx.textAlign = "center";
-        this.ctx.textBaseline = "middle";
-        this.ctx.fillText(
-          shape.url,
-          shape.x + shape.width / 2,
-          shape.y + shape.height / 2
-        );
-        this.ctx.restore();
-      }
-
+    this.remoteStreamingShapes.forEach((shape) => {
+      this.ctx.save();
+      TransformEngine.applyTransform(this.ctx, shape);
+      this.renderSingleShape(shape);
       this.ctx.restore();
     });
 
@@ -1078,363 +949,224 @@ export class CanvasEngine {
       this.activeTextarea.style.transform = `translate(${x * this.scale + this.panX}px, ${y * this.scale + this.panY}px)`;
     }
 
-    this.remoteStreamingShapes.forEach((shape) => {
-      if (shape.type === "rectangle") {
-        this.drawRect(
-          shape.x,
-          shape.y,
-          shape.width,
-          shape.height,
-          shape.strokeWidth || DEFAULT_STROKE_WIDTH,
-          shape.strokeFill || DEFAULT_STROKE_FILL,
-          shape.bgFill || DEFAULT_BG_FILL,
-          shape.rounded,
-          shape.strokeStyle,
-          shape.roughStyle,
-          shape.fillStyle
-        );
+    if (this.activeTool === "selection" && this.isMarqueeSelecting) {
+      this.drawMarquee();
+    }
+
+    if (this.activeTool === "lasso" && this.isLassoSelecting && this.lassoPoints.length > 1) {
+      this.drawLasso();
+    }
+
+    if (this.laserStrokes.length > 0) {
+      this.drawLaserStrokes();
+    }
+
+    if (this.SelectionController.hasSelection() && this.activeTool === "selection") {
+      this.SelectionController.drawSelectionBox();
+    }
+
+    if (this.SelectionController.activeSnapLines?.length > 0) {
+      this.drawSnapLines(viewportBounds);
+    }
+
+    // Multiplayer Presence
+    this.renderPresence(viewportBounds);
+
+    this.ctx.restore();
+  }
+
+  private renderSingleShape(shape: Shape) {
+    if (shape.type === "rectangle") {
+      this.drawRect(shape.x, shape.y, shape.width, shape.height, shape.strokeWidth || DEFAULT_STROKE_WIDTH, shape.strokeFill || DEFAULT_STROKE_FILL, shape.bgFill || DEFAULT_BG_FILL, shape.rounded, shape.strokeStyle, shape.roughStyle, shape.fillStyle);
     } else if (shape.type === "ellipse") {
-      this.drawEllipse(
-        shape.x,
-        shape.y,
-        shape.radX,
-        shape.radY,
-        shape.strokeWidth || DEFAULT_STROKE_WIDTH,
-        shape.strokeFill || DEFAULT_STROKE_FILL,
-        shape.bgFill || DEFAULT_BG_FILL,
-        shape.strokeStyle,
-        shape.roughStyle,
-        shape.fillStyle
-      );
+      this.drawEllipse(shape.x, shape.y, shape.radX, shape.radY, shape.strokeWidth || DEFAULT_STROKE_WIDTH, shape.strokeFill || DEFAULT_STROKE_FILL, shape.bgFill || DEFAULT_BG_FILL, shape.strokeStyle, shape.roughStyle, shape.fillStyle);
     } else if (shape.type === "diamond") {
-      this.drawDiamond(
-        shape.x,
-        shape.y,
-        shape.width,
-        shape.height,
-        shape.strokeWidth || DEFAULT_STROKE_WIDTH,
-        shape.strokeFill || DEFAULT_STROKE_FILL,
-        shape.bgFill || DEFAULT_BG_FILL,
-        shape.rounded,
-        shape.strokeStyle,
-        shape.roughStyle,
-        shape.fillStyle
-      );
+      this.drawDiamond(shape.x, shape.y, shape.width, shape.height, shape.strokeWidth || DEFAULT_STROKE_WIDTH, shape.strokeFill || DEFAULT_STROKE_FILL, shape.bgFill || DEFAULT_BG_FILL, shape.rounded, shape.strokeStyle, shape.roughStyle, shape.fillStyle);
     } else if (shape.type === "line" || shape.type === "arrow") {
-      this.drawLine(
-        shape.x,
-        shape.y,
-        shape.toX,
-        shape.toY,
-        shape.strokeWidth || DEFAULT_STROKE_WIDTH,
-        shape.strokeFill || DEFAULT_STROKE_FILL,
-        shape.strokeStyle,
-        shape.roughStyle,
-        shape.type === "arrow"
-      );
+      this.drawLine(shape.x, shape.y, shape.toX, shape.toY, shape.strokeWidth || DEFAULT_STROKE_WIDTH, shape.strokeFill || DEFAULT_STROKE_FILL, shape.strokeStyle, shape.roughStyle, shape.type === "arrow");
     } else if (shape.type === "free-draw") {
-      this.drawFreeDraw(
-        shape.points,
-        shape.strokeFill,
-        shape.bgFill,
-        shape.strokeStyle,
-        shape.fillStyle,
-        shape.strokeWidth
-      );
+      this.drawFreeDraw(shape.points, shape.strokeFill, shape.bgFill, shape.strokeStyle, shape.fillStyle, shape.strokeWidth);
     } else if (shape.type === "text") {
-      this.drawText(
-        shape.x,
-        shape.y,
-        shape.width,
-        shape.height,
-        shape.text,
-        shape.strokeFill,
-        shape.fontStyle,
-        shape.fontFamily,
-        shape.fontSize,
-        shape.textAlign
-      );
+      this.drawText(shape.x, shape.y, shape.width, shape.height, shape.text, shape.strokeFill, shape.fontStyle, shape.fontFamily, shape.fontSize, shape.textAlign);
+    } else if (shape.type === "sticky") {
+      this.drawRect(shape.x, shape.y, shape.width, shape.height, 2, shape.strokeFill, shape.bgFill, shape.rounded, shape.strokeStyle, shape.roughStyle, "solid");
+      this.drawText(shape.x, shape.y, shape.width, shape.height, shape.text, shape.strokeFill, shape.fontStyle, shape.fontFamily, shape.fontSize, shape.textAlign);
     } else if (shape.type === "image") {
       this.drawImageShape(shape);
     } else if (shape.type === "frame") {
-      this.ctx.save();
-      this.ctx.strokeStyle = "#a5a5a5";
-      this.ctx.lineWidth = 2;
-      this.ctx.strokeRect(shape.x, shape.y, shape.width, shape.height);
-      
-      this.ctx.fillStyle = "#a5a5a5";
-      this.ctx.font = "14px sans-serif";
-      this.ctx.textBaseline = "bottom";
-      this.ctx.fillText(shape.frameName, shape.x, shape.y - 4);
-      this.ctx.restore();
+      this.drawFrame(shape);
     } else if (shape.type === "embed") {
-      this.ctx.save();
-      this.ctx.fillStyle = "#f1f3f5";
-      this.ctx.strokeStyle = "#ced4da";
-      this.ctx.lineWidth = 1;
-      this.ctx.fillRect(shape.x, shape.y, shape.width, shape.height);
-      this.ctx.strokeRect(shape.x, shape.y, shape.width, shape.height);
-      
-      this.ctx.fillStyle = "#868e96";
-      this.ctx.font = "14px sans-serif";
-      this.ctx.textAlign = "center";
-      this.ctx.textBaseline = "middle";
-      this.ctx.fillText("Web Embed", shape.x + shape.width / 2, shape.y + shape.height / 2);
-      this.ctx.restore();
-    } else if (shape.type === "github_card" || shape.type === "jira_card") {
-      this.ctx.save();
-      this.ctx.fillStyle = "#ffffff";
-      this.ctx.strokeStyle = shape.type === "github_card" ? "#24292e" : "#0052cc";
-      this.ctx.lineWidth = 2;
-      this.ctx.beginPath();
-      this.ctx.roundRect ? this.ctx.roundRect(shape.x, shape.y, shape.width, shape.height, 8) : this.ctx.rect(shape.x, shape.y, shape.width, shape.height);
-      this.ctx.fill();
-      this.ctx.stroke();
-
-      this.ctx.fillStyle = shape.type === "github_card" ? "#24292e" : "#0052cc";
-      this.ctx.font = "bold 14px sans-serif";
-      this.ctx.textAlign = "left";
-      this.ctx.textBaseline = "top";
-      this.ctx.fillText(shape.type === "github_card" ? "GitHub Issue" : "Jira Issue", shape.x + 12, shape.y + 12);
-
-      this.ctx.fillStyle = "#333333";
-      this.ctx.font = "14px sans-serif";
-      // Auto wrap title
-      const titleLines = [];
-      let currentLine = "";
-      const words = shape.title.split(" ");
-      for (const word of words) {
-        if (this.ctx.measureText(currentLine + " " + word).width > shape.width - 24) {
-          titleLines.push(currentLine);
-          currentLine = word;
-        } else {
-          currentLine += (currentLine ? " " : "") + word;
-        }
-      }
-      titleLines.push(currentLine);
-
-      let textY = shape.y + 36;
-      for (const line of titleLines.slice(0, 3)) {
-        this.ctx.fillText(line, shape.x + 12, textY);
-        textY += 20;
-      }
-
-      this.ctx.fillStyle = "#555555";
-      this.ctx.font = "12px sans-serif";
-      this.ctx.fillText(`Status: ${shape.status}`, shape.x + 12, shape.y + shape.height - 24);
-      this.ctx.restore();
+      this.drawEmbed(shape);
     }
-  });
+  }
 
-  if(
-    this.SelectionController.hasSelection() &&
-      this.activeTool === "selection"
-    ) {
-    this.SelectionController.drawSelectionBox();
-}
+  private renderPresence(v: any) {
+    this.remoteCursors.forEach((state) => {
+      const color = state.color;
+      // Viewports
+      if (state.viewport) {
+        this.ctx.save();
+        this.ctx.setLineDash([10 / this.scale, 10 / this.scale]);
+        this.ctx.strokeStyle = color + "44";
+        this.ctx.lineWidth = 1 / this.scale;
+        this.ctx.strokeRect(state.viewport.x, state.viewport.y, state.viewport.w, state.viewport.h);
+        this.ctx.fillStyle = color + "88";
+        this.ctx.font = `${10 / this.scale}px Inter, sans-serif`;
+        this.ctx.fillText(state.userName, state.viewport.x + 5 / this.scale, state.viewport.y + 15 / this.scale);
+        this.ctx.restore();
+      }
+      // Selections
+      if (state.selectionIds?.length) {
+        state.selectionIds.forEach(id => {
+          const shape = this.existingShapes.find(s => s.id === id);
+          if (shape) {
+            this.ctx.save();
+            TransformEngine.applyTransform(this.ctx, shape);
+            const bounds = this.SelectionController.getShapeBounds(shape);
+            this.ctx.strokeStyle = color;
+            this.ctx.lineWidth = 1 / this.scale;
+            this.ctx.setLineDash([5 / this.scale, 5 / this.scale]);
+            this.ctx.strokeRect(bounds.x - 4, bounds.y - 4, bounds.width + 8, bounds.height + 8);
+            this.ctx.restore();
+          }
+        });
+      }
+      // Cursor (Screen Space)
+      const screenX = state.x * this.scale + this.panX;
+      const screenY = state.y * this.scale + this.panY;
+      this.ctx.save();
+      this.ctx.setTransform(1, 0, 0, 1, 0, 0);
+      this.ctx.shadowBlur = 4;
+      this.ctx.shadowColor = "rgba(0,0,0,0.2)";
+      this.ctx.fillStyle = color;
+      this.ctx.beginPath();
+      this.ctx.moveTo(screenX, screenY);
+      this.ctx.lineTo(screenX + 2, screenY + 18);
+      this.ctx.lineTo(screenX + 7, screenY + 13);
+      this.ctx.lineTo(screenX + 14, screenY + 20);
+      this.ctx.lineTo(screenX + 17, screenY + 17);
+      this.ctx.lineTo(screenX + 10, screenY + 10);
+      this.ctx.lineTo(screenX + 16, screenY + 4);
+      this.ctx.closePath();
+      this.ctx.fill();
+      this.ctx.strokeStyle = "white";
+      this.ctx.lineWidth = 1.5;
+      this.ctx.stroke();
+      this.ctx.font = "600 11px Inter, system-ui, sans-serif";
+      const tagWidth = this.ctx.measureText(state.userName).width + 12;
+      this.ctx.fillStyle = color;
+      this.ctx.beginPath();
+      roundRect(this.ctx, screenX + 10, screenY + 20, tagWidth, 20, 4);
+      this.ctx.fill();
+        this.ctx.fillStyle = "white";
+        this.ctx.fillText(state.userName, screenX + 16, screenY + 34);
 
-if (this.SelectionController.activeSnapLines && this.SelectionController.activeSnapLines.length > 0) {
-    this.ctx.save();
-    this.ctx.strokeStyle = "#e83e8c"; // Magenta color for snap lines
-    this.ctx.lineWidth = 1 / this.scale;
-    this.ctx.setLineDash([5 / this.scale, 5 / this.scale]);
-    
-    // Draw lines across the entire visible canvas
-    const visibleStartX = -this.panX / this.scale;
-    const visibleStartY = -this.panY / this.scale;
-    const visibleWidth = this.canvas.width / this.scale;
-    const visibleHeight = this.canvas.height / this.scale;
-
-    this.ctx.beginPath();
-    this.SelectionController.activeSnapLines.forEach(line => {
-        if (line.x !== undefined) {
-            this.ctx.moveTo(line.x, visibleStartY);
-            this.ctx.lineTo(line.x, visibleStartY + visibleHeight);
+        if (state.isEditing) {
+            this.ctx.font = "italic 9px Inter, sans-serif";
+            this.ctx.fillStyle = "rgba(255,255,255,0.7)";
+            this.ctx.fillText("Editing...", screenX + 16, screenY + 44);
         }
-        if (line.y !== undefined) {
-            this.ctx.moveTo(visibleStartX, line.y);
-            this.ctx.lineTo(visibleStartX + visibleWidth, line.y);
-        }
+        
+        this.ctx.restore();
     });
-    this.ctx.stroke();
-    this.ctx.restore();
-}
+  }
 
-if (this.activeTool === "selection" && this.isMarqueeSelecting) {
-    this.ctx.save();
-    this.ctx.fillStyle = "rgba(105, 101, 219, 0.08)";
-    this.ctx.strokeStyle = "#6965db";
-    this.ctx.lineWidth = 1;
-    
+  private drawMarquee() {
     const minX = Math.min(this.marqueeStartX, this.marqueeCurrentX);
     const minY = Math.min(this.marqueeStartY, this.marqueeCurrentY);
     const width = Math.abs(this.marqueeCurrentX - this.marqueeStartX);
     const height = Math.abs(this.marqueeCurrentY - this.marqueeStartY);
-    
-    this.ctx.beginPath();
-    this.ctx.rect(minX, minY, width, height);
-    this.ctx.fill();
-    this.ctx.stroke();
-    this.ctx.restore();
-}
-
-if (this.activeTool === "lasso" && this.isLassoSelecting && this.lassoPoints.length > 0) {
     this.ctx.save();
     this.ctx.fillStyle = "rgba(105, 101, 219, 0.08)";
     this.ctx.strokeStyle = "#6965db";
-    this.ctx.lineWidth = 1;
-    this.ctx.setLineDash([5, 5]);
-    
+    this.ctx.lineWidth = 1 / this.scale;
+    this.ctx.strokeRect(minX, minY, width, height);
+    this.ctx.fillRect(minX, minY, width, height);
+    this.ctx.restore();
+  }
+
+  private drawLasso() {
+    this.ctx.save();
+    this.ctx.fillStyle = "rgba(105, 101, 219, 0.08)";
+    this.ctx.strokeStyle = "#6965db";
+    this.ctx.lineWidth = 1 / this.scale;
     this.ctx.beginPath();
     this.ctx.moveTo(this.lassoPoints[0].x, this.lassoPoints[0].y);
-    for (let i = 1; i < this.lassoPoints.length; i++) {
-        this.ctx.lineTo(this.lassoPoints[i].x, this.lassoPoints[i].y);
-    }
+    this.lassoPoints.forEach(p => this.ctx.lineTo(p.x, p.y));
     this.ctx.closePath();
     this.ctx.fill();
     this.ctx.stroke();
     this.ctx.restore();
-}
+  }
 
-if (this.laserStrokes.length > 0) {
+  private drawLaserStrokes() {
     const now = Date.now();
     this.ctx.save();
-    this.ctx.lineCap = "round";
-    this.ctx.lineJoin = "round";
-    
     this.laserStrokes.forEach(stroke => {
-        if (stroke.points.length < 2) return;
-        this.ctx.strokeStyle = stroke.strokeFill;
-        
-        for (let i = 0; i < stroke.points.length - 1; i++) {
-            const p1 = stroke.points[i];
-            const p2 = stroke.points[i + 1];
-            
-            const age = now - p1.time;
-            const opacity = Math.max(0, 1 - (age / 1500));
-            
-            this.ctx.beginPath();
-            this.ctx.moveTo(p1.x, p1.y);
-            this.ctx.lineTo(p2.x, p2.y);
-            this.ctx.globalAlpha = opacity;
-            this.ctx.lineWidth = 6 * opacity;
-            this.ctx.stroke();
-        }
+      if (stroke.points.length < 2) return;
+      this.ctx.strokeStyle = stroke.strokeFill;
+      this.ctx.lineCap = "round";
+      this.ctx.lineJoin = "round";
+      for (let i = 0; i < stroke.points.length - 1; i++) {
+        const p1 = stroke.points[i];
+        const p2 = stroke.points[i + 1];
+        const age = now - p1.time;
+        const opacity = Math.max(0, 1 - (age / 1500));
+        this.ctx.globalAlpha = opacity;
+        this.ctx.lineWidth = 6 * opacity / this.scale;
+        this.ctx.beginPath();
+        this.ctx.moveTo(p1.x, p1.y);
+        this.ctx.lineTo(p2.x, p2.y);
+        this.ctx.stroke();
+      }
     });
     this.ctx.restore();
-}
+  }
 
-this.remoteCursors.forEach((cursor, userConnKey) => {
-  const { x, y, userId, userName } = cursor;
-  const screenX = x * this.scale + this.panX;
-  const screenY = y * this.scale + this.panY;
-
-  const cursorColor: string = getClientColor({ userId, userName });
-  const boxBackground = cursorColor;
-  const boxTextColor = COLOR_CHARCOAL_BLACK;
-  const pointerWidth = 12;
-  const pointerHeight = 15;
-
-  const lastClickTime = this.remoteClickIndicators.get(userConnKey);
-  const showClickCircle =
-    !!lastClickTime && Date.now() - lastClickTime < 800;
-
-  if (showClickCircle) {
+  private drawSnapLines(v: any) {
+    this.ctx.save();
+    this.ctx.strokeStyle = "#e83e8c";
+    this.ctx.lineWidth = 1 / this.scale;
+    this.ctx.setLineDash([5 / this.scale, 5 / this.scale]);
     this.ctx.beginPath();
-    this.ctx.arc(x, y, 14, 0, Math.PI * 2, false);
-    this.ctx.lineWidth = 3;
+    this.SelectionController.activeSnapLines.forEach(line => {
+      if (line.x !== undefined) { this.ctx.moveTo(line.x, v.minY); this.ctx.lineTo(line.x, v.maxY); }
+      if (line.y !== undefined) { this.ctx.moveTo(v.minX, line.y); this.ctx.lineTo(v.maxX, line.y); }
+    });
     this.ctx.stroke();
-    this.ctx.strokeStyle = "rgb(255 255 255 / 53%)";
-    this.ctx.closePath();
+    this.ctx.restore();
+  }
 
-    this.ctx.beginPath();
-    this.ctx.arc(x, y, 14, 0, Math.PI * 2, false);
+  private drawFrame(shape: any) {
+    this.ctx.save();
+    this.ctx.strokeStyle = "#a5a5a5";
+    this.ctx.lineWidth = 2;
+    this.ctx.setLineDash([6, 3]);
+    this.ctx.strokeRect(shape.x, shape.y, shape.width, shape.height);
+    this.ctx.setLineDash([]);
+    this.ctx.fillStyle = "#a5a5a5";
+    this.ctx.font = "bold 13px sans-serif";
+    this.ctx.textBaseline = "bottom";
+    this.ctx.fillText(shape.frameName, shape.x, shape.y - 6);
+    this.ctx.restore();
+  }
+
+  private drawEmbed(shape: any) {
+    this.ctx.save();
+    this.ctx.fillStyle = "#f1f3f5";
+    this.ctx.strokeStyle = "#ced4da";
     this.ctx.lineWidth = 1;
-    this.ctx.stroke();
-    this.ctx.strokeStyle = cursorColor;
-    this.ctx.closePath();
+    this.ctx.fillRect(shape.x, shape.y, shape.width, shape.height);
+    this.ctx.strokeRect(shape.x, shape.y, shape.width, shape.height);
+    this.ctx.fillStyle = "#868e96";
+    this.ctx.font = "14px sans-serif";
+    this.ctx.textAlign = "center";
+    this.ctx.textBaseline = "middle";
+    this.ctx.fillText(shape.url, shape.x + shape.width / 2, shape.y + shape.height / 2);
+    this.ctx.restore();
   }
 
-  this.ctx.save();
-
-  // Draw white background for the pointer
-  this.ctx.fillStyle = COLOR_WHITE;
-  this.ctx.strokeStyle = COLOR_WHITE;
-  this.ctx.lineWidth = 6;
-  this.ctx.lineJoin = "round";
-  this.ctx.beginPath();
-  this.ctx.moveTo(screenX, screenY);
-  this.ctx.lineTo(screenX, screenY + 14);
-  this.ctx.lineTo(screenX + 4, screenY + 9);
-  this.ctx.lineTo(screenX + 11, screenY + 8);
-  this.ctx.closePath();
-  this.ctx.stroke();
-  this.ctx.fill();
-
-  // Draw actual pointer with color
-  this.ctx.fillStyle = cursorColor;
-  this.ctx.strokeStyle = cursorColor;
-  this.ctx.lineWidth = 2;
-  this.ctx.beginPath();
-  this.ctx.moveTo(screenX, screenY);
-  this.ctx.lineTo(screenX, screenY + 14);
-  this.ctx.lineTo(screenX + 4, screenY + 9);
-  this.ctx.lineTo(screenX + 11, screenY + 8);
-  this.ctx.closePath();
-  this.ctx.fill();
-  this.ctx.stroke();
-
-  const offsetX = screenX + pointerWidth / 2;
-  const offsetY = screenY + pointerHeight + 2;
-  const paddingX = 5;
-  const paddingY = 3;
-
-  this.ctx.font = "600 13px sans-serif";
-  const textMetrics = this.ctx.measureText(userName);
-  const textHeight =
-    textMetrics.actualBoundingBoxAscent +
-    textMetrics.actualBoundingBoxDescent;
-  const boxHeight = Math.max(textHeight, 12) + paddingY * 2 + 2;
-  const boxWidth = textMetrics.width + paddingX * 2 + 4;
-  const boxX = offsetX - 1;
-  const boxY = offsetY - 1;
-
-  // Draw name label box
-  if (this.ctx.roundRect) {
-    this.ctx.beginPath();
-    this.ctx.roundRect(boxX, boxY, boxWidth, boxHeight, 8);
-    this.ctx.fillStyle = boxBackground;
-    this.ctx.fill();
-    this.ctx.strokeStyle = COLOR_WHITE;
-    this.ctx.stroke();
-
-    // Highlight stroke for speaker // Option 2 for showing active indicator
-    // this.ctx.beginPath();
-    // this.ctx.roundRect(boxX - 2, boxY - 2, boxWidth + 4, boxHeight + 4, 8);
-    // this.ctx.strokeStyle = labelStrokeColor;
-    // this.ctx.stroke();
-  } else {
-    roundRect(this.ctx, boxX, boxY, boxWidth, boxHeight, 8, COLOR_WHITE);
   }
-
-  // Draw username text
-  this.ctx.fillStyle = boxTextColor;
-  this.ctx.fillText(
-    userName,
-    offsetX + paddingX + 1,
-    offsetY + paddingY + textMetrics.actualBoundingBoxAscent
-  );
-
-  this.ctx.restore();
-});
-
-this.remoteClickIndicators.forEach((timestamp, key) => {
-  if (Date.now() - timestamp > 1000) {
-    this.remoteClickIndicators.delete(key);
-  }
-});
-
-this.triggerViewChange();
   }
 
   public getShapeCenter(shape: Shape): { x: number; y: number } {
@@ -2054,7 +1786,18 @@ mouseMoveHandler = (e: MouseEvent) => {
       this.cursorThrottleTimeout = window.setTimeout(() => {
         const coords = this.transformPanScale(e.clientX, e.clientY);
 
-        const payload: any = { x: coords.x, y: coords.y };
+        const payload: any = { 
+            x: coords.x, 
+            y: coords.y,
+            selectionIds: this.SelectionController.getSelectedShapes().map(s => s.id),
+            isEditing: this.SelectionController.isDraggingShape() || this.SelectionController.isResizingShape() || !!this.activeTextarea,
+            viewport: {
+                x: -this.panX / this.scale,
+                y: -this.panY / this.scale,
+                w: this.canvas.width / this.scale,
+                h: this.canvas.height / this.scale
+            }
+        };
         if (this.activeTool === "laser" && this.clicked) {
             payload.isLaser = true;
             payload.strokeFill = this.strokeFill;
