@@ -27,18 +27,19 @@ We have recently completed a massive 8-phase development roadmap, transforming C
 - **Rulers & Guidelines** with snap-to-grid capabilities.
 - **Customization:** Dark/Light mode and custom board covers.
 
-### Phase 3: Real-Time Collaboration ⚡
-- **Yjs (CRDT) Engine** for pixel-perfect, conflict-free synchronization.
-- **Node.js WebSocket Microservice** (`@repo/ws-server`) for low-latency broadcasts.
+### Phase 3: Real-Time & Distributed State ⚡
+- **Yjs-Native Architecture:** Migrated from legacy array-based state to a full CRDT-native document structure.
+- **Atomic Persistence:** All shape mutations are now atomic, conflict-free, and automatically synchronized without reliance on `localStorage`.
+- **Collaborative Undo/Redo:** Integrated `Y.UndoManager` for shared, context-aware history tracking across distributed clients.
+- **Node.js WebSocket Microservice:** (`@repo/ws-server`) handles low-latency broadcasts and document state recovery.
 - **Live Presence:** Multi-colored cursors with user name tags and active selection indicators.
-- **Spatial Comments:** Threaded comments anchored directly to the canvas.
 
-### Phase 3.5: Identity, Access Control & Admin Infrastructure 🛡️
-- **Workspace-Centric Architecture:** Shifted from direct board ownership to multi-tenant Workspaces.
-- **NextAuth Governance:** Role-based JWT embedding (USER/ADMIN) with instant ban-blocking.
-- **Centralized RBAC Engine:** Unified permission validation across Next.js APIs and WebSocket handshakes.
-- **Enterprise Security:** Rate limiting via Upstash Redis for Auth, AI, and WebSocket connections.
-- **Admin Command Center:** Global user management, audit logs, and system-wide moderation tools.
+### Phase 3.5: May 2026 Enterprise Audit Compliance 🛡️
+- **Workspace-Centric Architecture:** Shifted from direct board ownership to multi-tenant Workspaces for enterprise data isolation.
+- **Centralized RBAC Engine:** Unified permission validation across Next.js APIs and WebSocket handshakes, resolving the "Trust the Room ID" security vulnerability.
+- **Identity Governance:** NextAuth role-based JWT embedding (USER/ADMIN) with instant ban-blocking and audit logging.
+- **Enterprise Scalability:** Multi-tab session synchronization and WebSocket connection pooling for high-concurrency environments.
+- **Rate Limiting:** Enforced via Upstash Redis for Auth, AI, Exports, and Invitation systems.
 
 ### Phase 4: AI Differentiation 🧠
 - **Generative AI Integration** powered by Google's Gemini (1.5-Flash).
