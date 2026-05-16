@@ -10,9 +10,9 @@
 
 ---
 
-## 🌟 What's New? (The 7-Phase Evolution)
+## 🌟 What's New? (The 8-Phase Evolution)
 
-We have recently completed a massive 7-phase development roadmap, transforming CollabyDraw into a full-featured SaaS platform:
+We have recently completed a massive 8-phase development roadmap, transforming CollabyDraw into a full-featured SaaS platform:
 
 ### Phase 1: MVP Foundation & Architecture 🏗️
 - **Next.js 15 (App Router)** powering a monolithic fullstack architecture.
@@ -32,7 +32,13 @@ We have recently completed a massive 7-phase development roadmap, transforming C
 - **Node.js WebSocket Microservice** (`@repo/ws-server`) for low-latency broadcasts.
 - **Live Presence:** Multi-colored cursors with user name tags and active selection indicators.
 - **Spatial Comments:** Threaded comments anchored directly to the canvas.
-- **Role-Based Access Control:** Granular Owner, Editor, and Viewer permissions.
+
+### Phase 3.5: Identity, Access Control & Admin Infrastructure 🛡️
+- **Workspace-Centric Architecture:** Shifted from direct board ownership to multi-tenant Workspaces.
+- **NextAuth Governance:** Role-based JWT embedding (USER/ADMIN) with instant ban-blocking.
+- **Centralized RBAC Engine:** Unified permission validation across Next.js APIs and WebSocket handshakes.
+- **Enterprise Security:** Rate limiting via Upstash Redis for Auth, AI, and WebSocket connections.
+- **Admin Command Center:** Global user management, audit logs, and system-wide moderation tools.
 
 ### Phase 4: AI Differentiation 🧠
 - **Generative AI Integration** powered by Google's Gemini (1.5-Flash).
@@ -67,8 +73,9 @@ We have recently completed a massive 7-phase development roadmap, transforming C
 - **Frontend & API Framework:** Next.js 15 (App Router), React, TypeScript
 - **Styling:** Tailwind CSS, Radix UI (shadcn)
 - **Database & ORM:** SQLite/PostgreSQL, Prisma
-- **Real-Time Sync:** Yjs (CRDT), WebSockets (ws)
+- **Real-Time Sync:** Yjs (CRDT), WebSockets (ws), Redis (Upstash)
 - **Generative AI:** Google Gemini API
+- **Security:** Upstash Ratelimit, NextAuth JWT
 - **Monetization:** Stripe (Mocked for Templates/Subscriptions)
 - **Canvas:** Native HTML5 Canvas API + Custom Rendering Engine
 
