@@ -295,7 +295,7 @@ wss.on("connection", function connection(ws, req) {
 
           // Broadcast join to others (first tab only)
           const isFirstTab = [...connections.values()]
-            .filter(c => c.userId === userId && c.connectionId !== connectionId)
+            .filter(c => c.userId === connection.userId && c.connectionId !== connectionId)
             .every(c => !c.rooms.has(msg.roomId));
 
           if (isFirstTab) {
@@ -313,7 +313,7 @@ wss.on("connection", function connection(ws, req) {
         case WsDataType.LEAVE: {
           connection.rooms.delete(msg.roomId);
           const hasOtherTabs = [...connections.values()]
-            .some(c => c.userId === userId && c.connectionId !== connectionId && c.rooms.has(msg.roomId));
+            .some(c => c.userId === connection.userId && c.connectionId !== connectionId && c.rooms.has(msg.roomId));
 
           if (!hasOtherTabs) {
             await broadcast(msg.roomId, {
@@ -428,7 +428,7 @@ wss.on("connection", function connection(ws, req) {
     if (connection) {
       for (const roomId of connection.rooms) {
         const hasOther = [...connections.values()]
-          .some(c => c.userId === userId && c.connectionId !== connectionId && c.rooms.has(roomId));
+          .some(c => c.userId === connection.userId && c.connectionId !== connectionId && c.rooms.has(roomId));
 
         if (!hasOther) {
           await broadcast(roomId, {

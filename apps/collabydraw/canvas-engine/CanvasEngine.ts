@@ -4,7 +4,6 @@ import {
   FontFamily,
   FontSize,
   FontStyle,
-  LOCALSTORAGE_CANVAS_KEY,
   RoughStyle,
   Shape,
   StrokeEdge,
@@ -97,7 +96,14 @@ export class CanvasEngine {
   private textAlign: TextAlign = "left";
   private fontStyle: FontStyle = "normal";
 
-  private existingShapes: Shape[];
+  private existingShapes: Shape[] = [];
+  private yDoc: Y.Doc;
+  private yShapes: Y.Map<Shape>;
+  private yOrder: Y.Array<string>;
+  private yUndoManager: Y.UndoManager;
+  private connectionId: string | null = null;
+  public onHistoryChange: ((canUndo: boolean, canRedo: boolean) => void) | null = null;
+
   private isDraggingCanvas: boolean = false;
   private lastMouseX: number = 0;
   private lastMouseY: number = 0;
@@ -107,13 +113,8 @@ export class CanvasEngine {
   private marqueeCurrentX: number = 0;
   private marqueeCurrentY: number = 0;
   
-  // Yjs CRDT State
-  public yDoc = new Y.Doc();
-  public yShapes = this.yDoc.getMap<Shape>("shapes");
-  public yOrder = this.yDoc.getArray<string>("shapeOrder");
-  public yUndoManager = new Y.UndoManager([this.yShapes, this.yOrder]);
-
   private SelectionController: SelectionController;
+
   public isSnapToGrid: boolean = false;
   
   public followUserId: string | null = null;
@@ -155,9 +156,6 @@ export class CanvasEngine {
   private encryptionKey: string | null;
 
   private roughSeed: number = 1;
-
-  private connectionId: string | null = null;
-  private myConnections: WebSocketConnection[] = [];
 
   private streamingShapeId: string | null = null;
   private streamingThrottleTimeout: number | null = null;
@@ -233,6 +231,20 @@ export class CanvasEngine {
 
     this.clicked = false;
     this.existingShapes = [];
+    
+    // Initialize Yjs
+    this.yDoc = new Y.Doc();
+    this.yShapes = this.yDoc.getMap<Shape>("shapes");
+    this.yOrder = this.yDoc.getArray<string>("shapeOrder");
+    this.yUndoManager = new Y.UndoManager([this.yShapes, this.yOrder]);
+
+    // Observer for undo/redo re-renders
+    this.yUndoManager.on("stack-item-added", () => {
+      this.rebuildFromYjs();
+    });
+    this.yUndoManager.on("stack-item-popped", () => {
+      this.rebuildFromYjs();
+    });
 
     this.canvas.width = document.body.clientWidth;
     this.canvas.height = document.body.clientHeight;
@@ -242,14 +254,6 @@ export class CanvasEngine {
     this.init();
     this.initMouseHandler();
 
-    this.SelectionController.setOnUpdate(() => {
-      if (this.isStandalone) {
-        localStorage.setItem(
-          LOCALSTORAGE_CANVAS_KEY,
-          JSON.stringify(this.existingShapes)
-        );
-      }
-    });
     this.SelectionController.setOnLiveUpdate((shapes) => {
       shapes.forEach(shape => {
         this.updateConnectedLines(shape);
@@ -652,17 +656,6 @@ export class CanvasEngine {
 
   async init() {
     window.addEventListener("keydown", this.handleKeyDown);
-    if (this.isStandalone) {
-      try {
-        const storedShapes = localStorage.getItem(LOCALSTORAGE_CANVAS_KEY);
-        if (storedShapes) {
-          const parsedShapes = JSON.parse(storedShapes);
-          this.existingShapes = [...this.existingShapes, ...parsedShapes];
-        }
-      } catch (e) {
-        console.error("Error loading shapes from localStorage:", e);
-      }
-    }
     this.clearCanvas();
   }
 
@@ -1484,7 +1477,7 @@ mouseDownHandler = (e: MouseEvent) => {
   this.startY = this.isSnapToGrid ? Math.round(y / 20) * 20 : y;
 
   if (this.activeTool === "free-draw") {
-    this.existingShapes.push({
+    this._addShapeToCRDT({
       id: uuidv4(),
       type: "free-draw",
       points: [{ x, y }],
@@ -1599,13 +1592,8 @@ mouseUpHandler = (e: MouseEvent) => {
                 (shape) => shape.id === selectedShape.id
               );
               if (index !== -1) {
-                this.existingShapes[index] = selectedShape;
-                if (this.isStandalone) {
-                  localStorage.setItem(
-                    LOCALSTORAGE_CANVAS_KEY,
-                    JSON.stringify(this.existingShapes)
-                  );
-                } else if (this.sendMessage && this.roomId) {
+                this._updateShapeInCRDT(selectedShape);
+                if (this.sendMessage && this.roomId) {
                   try {
                     this.sendMessage?.(
                       JSON.stringify({
@@ -1683,12 +1671,6 @@ mouseUpHandler = (e: MouseEvent) => {
 
   this.clicked = false;
 
-  if (this.SelectionController.hasSelection()) {
-    localStorage.setItem(
-      LOCALSTORAGE_CANVAS_KEY,
-      JSON.stringify(this.existingShapes)
-    );
-  }
 
   const { x, y } = this.transformPanScale(e.clientX, e.clientY);
 
@@ -1855,19 +1837,10 @@ mouseUpHandler = (e: MouseEvent) => {
     }
 
     this.saveState();
-    this.existingShapes.push(shape);
+    this._addShapeToCRDT(shape);
     this.notifyShapeCountChange();
 
-    if (this.isStandalone) {
-      try {
-        localStorage.setItem(
-          LOCALSTORAGE_CANVAS_KEY,
-          JSON.stringify(this.existingShapes)
-        );
-      } catch (e) {
-        console.error("Error saving shapes to localStorage:", e);
-      }
-    } else if (this.sendMessage && this.roomId) {
+    if (this.sendMessage && this.roomId) {
       this.clearCanvas();
 
       const message = {
@@ -2420,15 +2393,10 @@ touchEndHandler = (e: TouchEvent) => {
     };
 
     this.saveState();
-    this.existingShapes.push(newShape);
+    this._addShapeToCRDT(newShape);
     this.notifyShapeCountChange();
 
-    if (this.isStandalone) {
-      localStorage.setItem(
-        LOCALSTORAGE_CANVAS_KEY,
-        JSON.stringify(this.existingShapes)
-      );
-    } else if (this.sendMessage && this.roomId) {
+    if (this.sendMessage && this.roomId) {
       this.sendMessage(
         JSON.stringify({
           type: WsDataType.DRAW,
@@ -2512,7 +2480,7 @@ touchEndHandler = (e: TouchEvent) => {
   };
 
   this.saveState();
-  this.existingShapes.push(tempShape);
+  this._addShapeToCRDT(tempShape);
   this.notifyShapeCountChange();
   this.clearCanvas();
 
@@ -2563,22 +2531,21 @@ touchEndHandler = (e: TouchEvent) => {
     const index = this.existingShapes.findIndex(s => s.id === tempShape.id);
     if (index !== -1) {
       if (!text) {
-        this.existingShapes.splice(index, 1);
+        this._removeShapeFromCRDT(tempShape.id);
         this.notifyShapeCountChange();
       } else {
-        this.existingShapes[index] = {
+        const updatedShape = {
           ...tempShape,
           text
         } as Shape;
+        this._updateShapeInCRDT(updatedShape);
       }
     }
 
     this.activeTextarea = null;
     this.activeTextPosition = null;
 
-    if (this.isStandalone) {
-      localStorage.setItem(LOCALSTORAGE_CANVAS_KEY, JSON.stringify(this.existingShapes));
-    } else if (this.sendMessage && this.roomId && text && index !== -1) {
+    if (this.sendMessage && this.roomId && text && index !== -1) {
       this.sendMessage(JSON.stringify({ type: WsDataType.DRAW, id: tempShape.id, message: this.existingShapes[index], roomId: this.roomId }));
     }
 
@@ -2637,7 +2604,7 @@ touchEndHandler = (e: TouchEvent) => {
       textAlign: "center",
       strokeFill: "#888",
     };
-    this.existingShapes.push(loadingShape);
+    this._addShapeToCRDT(loadingShape);
     this.clearCanvas();
 
     try {
@@ -2647,7 +2614,7 @@ touchEndHandler = (e: TouchEvent) => {
       const data = await res.json();
 
       // Remove loading shape
-      this.existingShapes = this.existingShapes.filter(s => s.id !== loadingId);
+      this._removeShapeFromCRDT(loadingId);
 
       const cardShape: Shape = {
         id: uuidv4(),
@@ -2662,18 +2629,15 @@ touchEndHandler = (e: TouchEvent) => {
       };
 
       this.saveState();
-      this.existingShapes.push(cardShape);
+      this._addShapeToCRDT(cardShape);
       this.notifyShapeCountChange();
 
-      if (this.isStandalone) {
-        localStorage.setItem(LOCALSTORAGE_CANVAS_KEY, JSON.stringify(this.existingShapes));
-      } else if (this.sendMessage && this.roomId) {
+      if (this.sendMessage && this.roomId) {
         this.sendMessage(JSON.stringify({ type: WsDataType.DRAW, id: cardShape.id, message: cardShape, roomId: this.roomId }));
       }
     } catch (e) {
       console.error(e);
-      // Remove loading shape
-      this.existingShapes = this.existingShapes.filter(s => s.id !== loadingId);
+      this._removeShapeFromCRDT(loadingId);
       alert("Failed to load integration card.");
     }
     this.clearCanvas();
@@ -2720,12 +2684,10 @@ touchEndHandler = (e: TouchEvent) => {
       };
 
       this.saveState();
-      this.existingShapes.push(shape);
+      this._addShapeToCRDT(shape);
       this.notifyShapeCountChange();
 
-      if (this.isStandalone) {
-        localStorage.setItem(LOCALSTORAGE_CANVAS_KEY, JSON.stringify(this.existingShapes));
-      } else if (this.sendMessage && this.roomId) {
+      if (this.sendMessage && this.roomId) {
         this.sendMessage(
           JSON.stringify({
             type: WsDataType.DRAW,
@@ -3313,20 +3275,13 @@ eraser(x: number, y: number) {
   if (shapeIndex !== -1) {
     this.saveState();
     const erasedShape = this.existingShapes[shapeIndex];
-    this.existingShapes.splice(shapeIndex, 1);
+    if (erasedShape.id) {
+      this._removeShapeFromCRDT(erasedShape.id);
+    }
     this.notifyShapeCountChange();
     this.clearCanvas();
 
-    if (this.isStandalone) {
-      try {
-        localStorage.setItem(
-          LOCALSTORAGE_CANVAS_KEY,
-          JSON.stringify(this.existingShapes)
-        );
-      } catch (e) {
-        console.error("Error saving shapes to localStorage:", e);
-      }
-    } else if (this.sendMessage && this.roomId) {
+    if (this.sendMessage && this.roomId) {
       try {
         this.sendMessage?.(
           JSON.stringify({
@@ -3396,15 +3351,12 @@ setScale(newScale: number) {
   this.clearCanvas();
 }
 
-clearAllShapes() {
-  this.saveState();
-  this.existingShapes = [];
-  this.notifyShapeCountChange();
-  this.clearCanvas();
-  if (this.isStandalone) {
-    localStorage.removeItem(LOCALSTORAGE_CANVAS_KEY);
+  clearAllShapes() {
+    this.saveState();
+    this._clearAllCRDT();
+    this.notifyShapeCountChange();
+    this.clearCanvas();
   }
-}
 
 /** Returns a snapshot of the current shapes — used by minimap and autosave */
 getShapes(): Shape[] {
@@ -3432,9 +3384,9 @@ handleResize(width: number, height: number) {
       (shape) => shape.id === updatedShape.id
     );
     if (index !== -1) {
-      this.existingShapes[index] = updatedShape;
+      this._updateShapeInCRDT(updatedShape);
       this.clearCanvas();
-
+      
       // Broadcast update
       if (!this.isStandalone && this.isConnected && this.roomId) {
         try {
@@ -3457,9 +3409,9 @@ handleResize(width: number, height: number) {
       const isNew = index === -1;
       
       if (isNew) {
-        this.existingShapes.push(shape);
+        this._addShapeToCRDT(shape);
       } else {
-        this.existingShapes[index] = shape;
+        this._updateShapeInCRDT(shape);
         const selectedShapes = this.SelectionController.getSelectedShapes();
         const selIndex = selectedShapes.findIndex(s => s.id === shape.id);
         if (selIndex !== -1) {
@@ -3487,9 +3439,7 @@ handleResize(width: number, height: number) {
   }
 
   public removeShape(id: string): void {
-  this.existingShapes = this.existingShapes.filter(
-    (shape) => shape.id !== id
-  );
+  this._removeShapeFromCRDT(id);
   this.clearCanvas();
 }
 
@@ -3513,7 +3463,7 @@ handleResize(width: number, height: number) {
     const reordered = ordered.map(id => map.get(id)).filter(Boolean) as typeof this.existingShapes;
     // Keep any shapes not in ordered list at the end
     const extras = this.existingShapes.filter(s => s.id != null && !(ordered as (string | null)[]).includes(s.id));
-    this.existingShapes = [...reordered, ...extras];
+    this._setShapesCRDT([...reordered, ...extras]);
     this.clearCanvas();
   }
 
@@ -3593,7 +3543,7 @@ public duplicateSelected() {
       if ('startShapeId' in clonedShape) delete clonedShape.startShapeId;
       if ('endShapeId' in clonedShape) delete clonedShape.endShapeId;
     
-      this.existingShapes.push(clonedShape);
+      this._addShapeToCRDT(clonedShape);
       newSelection.push(clonedShape);
   });
   
@@ -3609,15 +3559,17 @@ public sendBackward() {
   this.saveState();
   
   // Sort by index so we process from front to back, to safely move things backward
-  const indices = selectedShapes.map(s => this.existingShapes.findIndex(e => e.id === s.id)).filter(i => i !== -1).sort((a, b) => a - b);
+  const currentShapes = [...this.existingShapes];
+  const indices = selectedShapes.map(s => currentShapes.findIndex(e => e.id === s.id)).filter(i => i !== -1).sort((a, b) => a - b);
   
   indices.forEach(index => {
       if (index > 0) {
-        const temp = this.existingShapes[index - 1];
-        this.existingShapes[index - 1] = this.existingShapes[index];
-        this.existingShapes[index] = temp;
+        const temp = currentShapes[index - 1];
+        currentShapes[index - 1] = currentShapes[index];
+        currentShapes[index] = temp;
       }
   });
+  this._setShapesCRDT(currentShapes);
   this.clearCanvas();
   this.syncAllShapes();
 }
@@ -3631,15 +3583,15 @@ public sendToBack() {
   selectedShapes.forEach(selectedShape => {
       const index = this.existingShapes.findIndex((s) => s.id === selectedShape.id);
       if (index !== -1) {
-          const [shape] = this.existingShapes.splice(index, 1);
+          const shape = this.existingShapes[index];
           shapesToMove.push(shape);
       }
   });
   
   // unshift them backwards so their relative order is preserved, wait unshifting in order reverses them. Let's unshift backwards
-  shapesToMove.reverse().forEach(shape => {
-      this.existingShapes.unshift(shape);
-  });
+  const currentShapes = this.existingShapes;
+  const filtered = currentShapes.filter(s => !selectedShapes.some(ss => ss.id === s.id));
+  this._setShapesCRDT([...shapesToMove, ...filtered]);
   
   this.clearCanvas();
   this.syncAllShapes();
@@ -3651,16 +3603,18 @@ public bringForward() {
   this.saveState();
   
   // Process from back to front
-  const indices = selectedShapes.map(s => this.existingShapes.findIndex(e => e.id === s.id)).filter(i => i !== -1).sort((a, b) => b - a);
+  const currentShapes = [...this.existingShapes];
+  const indices = selectedShapes.map(s => currentShapes.findIndex(e => e.id === s.id)).filter(i => i !== -1).sort((a, b) => b - a);
   
   indices.forEach(index => {
-      if (index < this.existingShapes.length - 1) {
-        const temp = this.existingShapes[index + 1];
-        this.existingShapes[index + 1] = this.existingShapes[index];
-        this.existingShapes[index] = temp;
+      if (index < currentShapes.length - 1) {
+        const temp = currentShapes[index + 1];
+        currentShapes[index + 1] = currentShapes[index];
+        currentShapes[index] = temp;
       }
   });
   
+  this._setShapesCRDT(currentShapes);
   this.clearCanvas();
   this.syncAllShapes();
 }
@@ -3674,14 +3628,14 @@ public bringToFront() {
   selectedShapes.forEach(selectedShape => {
       const index = this.existingShapes.findIndex((s) => s.id === selectedShape.id);
       if (index !== -1) {
-          const [shape] = this.existingShapes.splice(index, 1);
+          const shape = this.existingShapes[index];
           shapesToMove.push(shape);
       }
   });
   
-  shapesToMove.forEach(shape => {
-      this.existingShapes.push(shape);
-  });
+  const currentShapes = this.existingShapes;
+  const filtered = currentShapes.filter(s => !selectedShapes.some(ss => ss.id === s.id));
+  this._setShapesCRDT([...filtered, ...shapesToMove]);
   
   this.clearCanvas();
   this.syncAllShapes();
@@ -3725,16 +3679,6 @@ public deleteSelected() {
   this.SelectionController.setSelectedShapes([]);
   this.notifyShapeCountChange();
 
-  if (this.isStandalone) {
-    try {
-      localStorage.setItem(
-        LOCALSTORAGE_CANVAS_KEY,
-        JSON.stringify(this.existingShapes)
-      );
-    } catch (e) {
-      console.error("Error saving shapes to localStorage:", e);
-    }
-  }
   
   this.clearCanvas();
 }
@@ -3872,25 +3816,14 @@ public ungroupSelected() {
     // Stubbed for backward compatibility
   }
 
-  private rebuildFromYjs() {
-    // Stubbed for backward compatibility
-  }
-
-  public undo() {
-    this.yUndoManager.undo();
-    this.rebuildFromYjs();
-  }
-
-  public redo() {
-    this.yUndoManager.redo();
-    this.rebuildFromYjs();
-  }
 
   // Wave 8: Bulk-add shapes (AI / Mermaid).
   public addShapes(shapes: Shape[]) {
     if (!shapes || shapes.length === 0) return;
 
-    this.existingShapes = [...this.existingShapes, ...shapes];
+    this.yDoc.transact(() => {
+      shapes.forEach(s => this._addShapeToCRDT(s));
+    }, this.connectionId || "local");
     this.notifyShapeCountChange();
     this.clearCanvas();
     this.syncAllShapes();
@@ -3908,15 +3841,18 @@ public ungroupSelected() {
       if (s.id) posMap.set(s.id, { x: s.x, y: s.y });
     }
 
-    this.existingShapes = this.existingShapes.map(s => {
-      const update = s.id ? posMap.get(s.id as string) : undefined;
-      if (!update) return s;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const updated = { ...s } as any;
-      if (update.x != null) updated.x = update.x;
-      if (update.y != null) updated.y = update.y;
-      return updated as Shape;
-    });
+    this.yDoc.transact(() => {
+      this.existingShapes.forEach(s => {
+        const update = s.id ? posMap.get(s.id as string) : undefined;
+        if (update) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const updated = { ...s } as any;
+          if (update.x != null) updated.x = update.x;
+          if (update.y != null) updated.y = update.y;
+          this._updateShapeInCRDT(updated as Shape);
+        }
+      });
+    }, this.connectionId || "local");
 
     this.clearCanvas();
     this.syncAllShapes();
@@ -4047,40 +3983,6 @@ public ungroupSelected() {
   }
 
   private syncAllShapes() {
-
-  if (this.isStandalone) {
-    try {
-      localStorage.setItem(
-        LOCALSTORAGE_CANVAS_KEY,
-        JSON.stringify(this.existingShapes)
-      );
-    } catch (e) {
-      console.error("Error saving shapes to localStorage:", e);
-    }
-  } else if (this.sendMessage && this.roomId) {
-    // For collaborative rooms, an undo/redo might mean multiple shapes changed.
-    // To keep it simple without full CRDTs, we broadcast an update for ALL shapes
-    // in the new state, and maybe delete shapes that were removed.
-    // This is a naive approach: we broadcast the entire existingShapes array.
-    // A better way is to loop through and broadcast each.
-    this.existingShapes.forEach((shape) => {
-      try {
-        this.sendMessage?.(
-          JSON.stringify({
-            type: WsDataType.UPDATE,
-            id: shape.id,
-            message: shape,
-            roomId: this.roomId,
-          })
-        );
-      } catch (e) {
-        console.error("Error sending shape update ws message", e);
-      }
-    });
-    // We also need to tell others to erase shapes that are no longer here.
-    // But we don't know which ones were deleted unless we diff.
-    // Given the complexity, this is a basic first pass.
-  }
 }
 
   public exportToPNG() {
@@ -4181,4 +4083,77 @@ public ungroupSelected() {
   // re-render the actual canvas
   this.clearCanvas();
 }
+
+  public undo() {
+    this.yUndoManager.undo();
+    this.rebuildFromYjs();
+  }
+
+  public redo() {
+    this.yUndoManager.redo();
+    this.rebuildFromYjs();
+  }
+
+  private rebuildFromYjs() {
+    this.clearCanvas();
+    this.notifyShapeCountChange();
+    this.onHistoryChange?.(
+      this.yUndoManager.undoStack.length > 0,
+      this.yUndoManager.redoStack.length > 0
+    );
+  }
+
+  public get existingShapes(): Shape[] {
+    return this.yOrder.toArray().map(id => this.yShapes.get(id)).filter(Boolean) as Shape[];
+  }
+
+  private _addShapeToCRDT(shape: Shape) {
+    this.yDoc.transact(() => {
+      if (shape.id) {
+        this.yShapes.set(shape.id, shape);
+        if (!this.yOrder.toArray().includes(shape.id)) {
+          this.yOrder.push([shape.id]);
+        }
+      }
+    }, this.connectionId || "local");
+  }
+
+  private _removeShapeFromCRDT(shapeId: string) {
+    this.yDoc.transact(() => {
+      this.yShapes.delete(shapeId);
+      const arr = this.yOrder.toArray();
+      const idx = arr.indexOf(shapeId);
+      if (idx !== -1) {
+        this.yOrder.delete(idx, 1);
+      }
+    }, this.connectionId || "local");
+  }
+
+  private _updateShapeInCRDT(shape: Shape) {
+    this.yDoc.transact(() => {
+      if (shape.id) {
+        this.yShapes.set(shape.id, shape);
+      }
+    }, this.connectionId || "local");
+  }
+
+  private _clearAllCRDT() {
+    this.yDoc.transact(() => {
+      this.yShapes.clear();
+      this.yOrder.delete(0, this.yOrder.length);
+    }, this.connectionId || "local");
+  }
+
+  private _setShapesCRDT(shapes: Shape[]) {
+    this.yDoc.transact(() => {
+      this.yShapes.clear();
+      this.yOrder.delete(0, this.yOrder.length);
+      shapes.forEach(shape => {
+        if (shape.id) {
+          this.yShapes.set(shape.id, shape);
+          this.yOrder.push([shape.id]);
+        }
+      });
+    }, this.connectionId || "local");
+  }
 }

@@ -10,7 +10,7 @@ import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { CanvasEngine } from "@/canvas-engine/CanvasEngine";
 import { RoomParticipants } from "@repo/common/types";
 import { getRoomParamsFromHash } from "@/utils/roomParams";
-import { BgFill, canvasBgLight, FillStyle, FontFamily, FontSize, FontStyle, LOCALSTORAGE_CANVAS_KEY, Mode, RoughStyle, StrokeEdge, StrokeFill, StrokeStyle, StrokeWidth, TextAlign, ToolType } from "@/types/canvas";
+import { BgFill, canvasBgLight, FillStyle, FontFamily, FontSize, FontStyle, Mode, RoughStyle, StrokeEdge, StrokeFill, StrokeStyle, StrokeWidth, TextAlign, ToolType } from "@/types/canvas";
 import { MobileCommandBar } from "../MobileCommandBar";
 import ScreenLoading from "../ScreenLoading";
 import AppMenuButton from "../AppMenuButton";
@@ -178,15 +178,8 @@ export default function CanvasBoard() {
         }
     }, [theme, canvasEngineState.engine]);
 
-    useEffect(() => {
-        const storedShapes = localStorage.getItem(LOCALSTORAGE_CANVAS_KEY);
-        const isEmpty = !storedShapes || JSON.parse(storedShapes).length === 0;
-
-        setCanvasEngineState(prev => ({
-            ...prev,
-            isCanvasEmpty: isEmpty
-        }));
-    }, []);
+    const [canUndo, setCanUndo] = useState(false);
+    const [canRedo, setCanRedo] = useState(false);
 
     useEffect(() => {
         const { engine, scale } = canvasEngineState;
@@ -312,6 +305,11 @@ export default function CanvasBoard() {
             userRef.current.encryptionKey,
             theme === 'light' ? "light" : "dark"
         );
+        
+        engine.onHistoryChange = (undoable, redoable) => {
+            setCanUndo(undoable);
+            setCanRedo(redoable);
+        };
         engine.setOnShapeCountChange((count: number) => {
             setCanvasEngineState(prev => ({
                 ...prev,
@@ -703,6 +701,8 @@ export default function CanvasBoard() {
                     <UndoRedoControl 
                         undo={() => canvasEngineState.engine?.undo()} 
                         redo={() => canvasEngineState.engine?.redo()} 
+                        canUndo={canUndo}
+                        canRedo={canRedo}
                     />
                     <ZoomControl
                         scale={canvasEngineState.scale}
