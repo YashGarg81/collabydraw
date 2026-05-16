@@ -939,54 +939,6 @@ export class CanvasEngine {
   }
 
   clearCanvas() {
-<<<<<<< HEAD
-    this.ctx.setTransform(this.scale, 0, 0, this.scale, this.panX, this.panY);
-    this.ctx.clearRect(-this.panX / this.scale, -this.panY / this.scale, this.canvas.width / this.scale, this.canvas.height / this.scale);
-    this.ctx.fillStyle = this.canvasBgColor;
-    this.ctx.fillRect(-this.panX / this.scale, -this.panY / this.scale, this.canvas.width / this.scale, this.canvas.height / this.scale);
-
-    if (this.snapEngine.config.gridEnabled) {
-      this.snapEngine.drawGrid(this.ctx, this.panX, this.panY, this.scale, this.canvas.width, this.canvas.height, this.currentTheme === "dark");
-    }
-
-    const viewportBounds = {
-      minX: -this.panX / this.scale,
-      minY: -this.panY / this.scale,
-      maxX: (-this.panX + this.canvas.width) / this.scale,
-      maxY: (-this.panY + this.canvas.height) / this.scale,
-    };
-
-    const shapesToRender = this.spatialIndex.getVisibleShapes(viewportBounds);
-    const layerSorted = this.layerManager.filterAndSort(shapesToRender);
-
-    layerSorted.forEach((shape: Shape) => {
-      const isBeingStreamed = [...this.remoteStreamingShapes.values()].some(s => s.id === shape.id);
-      if (isBeingStreamed) return;
-
-      // Hover Affordance
-      if (this.hoveredShapeId === shape.id && this.activeTool === "selection" && !this.SelectionController.getSelectedShapes().find(s => s.id === shape.id)) {
-        this.ctx.save();
-        TransformEngine.applyTransform(this.ctx, shape);
-        const bounds = this.SelectionController.getShapeBounds(shape);
-        this.ctx.strokeStyle = "rgba(105, 101, 219, 0.4)";
-        this.ctx.lineWidth = 1.5 / this.scale;
-        this.ctx.strokeRect(bounds.x - 2, bounds.y - 2, bounds.width + 4, bounds.height + 4);
-        this.ctx.restore();
-      }
-      
-      this.ctx.save();
-      TransformEngine.applyTransform(this.ctx, shape);
-      this.renderSingleShape(shape);
-      this.ctx.restore();
-    });
-
-    this.remoteStreamingShapes.forEach((shape) => {
-      this.ctx.save();
-      TransformEngine.applyTransform(this.ctx, shape);
-      this.renderSingleShape(shape);
-      this.ctx.restore();
-    });
-=======
     try {
       this.ctx.setTransform(this.scale, 0, 0, this.scale, this.panX, this.panY);
       this.ctx.clearRect(-this.panX / this.scale, -this.panY / this.scale, this.canvas.width / this.scale, this.canvas.height / this.scale);
@@ -1049,7 +1001,6 @@ export class CanvasEngine {
       if (this.activeTool === "selection" && this.isMarqueeSelecting) {
         this.drawMarquee();
       }
->>>>>>> f593772 (fix: resolve all TS errors, canvas white-screen, and React Strict Mode bugs)
 
       if (this.activeTool === "lasso" && this.isLassoSelecting && this.lassoPoints.length > 1) {
         this.drawLasso();
@@ -1077,36 +1028,6 @@ export class CanvasEngine {
       console.error("Critical error in render loop:", err);
     }
   }
-
-<<<<<<< HEAD
-    if (this.activeTool === "selection" && this.isMarqueeSelecting) {
-      this.drawMarquee();
-    }
-
-    if (this.activeTool === "lasso" && this.isLassoSelecting && this.lassoPoints.length > 1) {
-      this.drawLasso();
-    }
-
-    if (this.laserStrokes.length > 0) {
-      this.drawLaserStrokes();
-    }
-
-    if (this.SelectionController.hasSelection() && this.activeTool === "selection") {
-      this.SelectionController.drawSelectionBox();
-    }
-
-    if (this.SelectionController.activeSnapLines?.length > 0) {
-      this.drawSnapLines(viewportBounds);
-    }
-
-    // Multiplayer Presence
-    this.renderPresence(viewportBounds);
-
-    this.ctx.restore();
-  }
-
-=======
->>>>>>> f593772 (fix: resolve all TS errors, canvas white-screen, and React Strict Mode bugs)
   private renderSingleShape(shape: Shape) {
     if (shape.type === "rectangle") {
       this.drawRect(shape.x, shape.y, shape.width, shape.height, shape.strokeWidth || DEFAULT_STROKE_WIDTH, shape.strokeFill || DEFAULT_STROKE_FILL, shape.bgFill || DEFAULT_BG_FILL, shape.rounded, shape.strokeStyle, shape.roughStyle, shape.fillStyle);
@@ -1149,13 +1070,8 @@ export class CanvasEngine {
       }
       // Selections
       if (state.selectionIds?.length) {
-<<<<<<< HEAD
-        state.selectionIds.forEach(id => {
-          const shape = this.existingShapes.find(s => s.id === id);
-=======
         state.selectionIds.forEach((id: string) => {
           const shape = this.existingShapes.find((s: Shape) => s.id === id);
->>>>>>> f593772 (fix: resolve all TS errors, canvas white-screen, and React Strict Mode bugs)
           if (shape) {
             this.ctx.save();
             TransformEngine.applyTransform(this.ctx, shape);
@@ -1191,27 +1107,11 @@ export class CanvasEngine {
       this.ctx.stroke();
       this.ctx.font = "600 11px Inter, system-ui, sans-serif";
       const tagWidth = this.ctx.measureText(state.userName).width + 12;
-<<<<<<< HEAD
-      this.ctx.fillStyle = color;
-      this.ctx.beginPath();
-      roundRect(this.ctx, screenX + 10, screenY + 20, tagWidth, 20, 4);
-      this.ctx.fill();
-        this.ctx.fillStyle = "white";
-        this.ctx.fillText(state.userName, screenX + 16, screenY + 34);
-
-        if (state.isEditing) {
-            this.ctx.font = "italic 9px Inter, sans-serif";
-            this.ctx.fillStyle = "rgba(255,255,255,0.7)";
-            this.ctx.fillText("Editing...", screenX + 16, screenY + 44);
-        }
-        
-        this.ctx.restore();
-=======
       // Draw the colored badge background first
       this.ctx.fillStyle = color;
       this.ctx.beginPath();
       roundRect(this.ctx, screenX + 10, screenY + 20, tagWidth, 20, 4);
-      this.ctx.fill();          // ← was missing: actually paint the badge
+      this.ctx.fill();          // ← actually paint the badge
       // Then draw the white name text on top
       this.ctx.fillStyle = "white";
       this.ctx.fillText(state.userName, screenX + 16, screenY + 34);
@@ -1222,7 +1122,6 @@ export class CanvasEngine {
         this.ctx.fillText("Editing...", screenX + 16, screenY + 44);
       }
       this.ctx.restore();
->>>>>>> f593772 (fix: resolve all TS errors, canvas white-screen, and React Strict Mode bugs)
     });
   }
 
@@ -1321,12 +1220,7 @@ export class CanvasEngine {
     this.ctx.restore();
   }
 
-<<<<<<< HEAD
-  }
-  }
-=======
 
->>>>>>> f593772 (fix: resolve all TS errors, canvas white-screen, and React Strict Mode bugs)
 
   public getShapeCenter(shape: Shape): { x: number; y: number } {
   const bounds = this.SelectionController.getShapeBounds(shape);
@@ -1391,7 +1285,7 @@ export class CanvasEngine {
     }
   }
 
-mouseDownHandler = (e: MouseEvent) => {
+  private mouseDownHandler = (e: MouseEvent) => {
   if (this.isReadOnly) {
       this.activeTool = "grab";
       this.isDraggingCanvas = true;
@@ -1533,7 +1427,7 @@ mouseDownHandler = (e: MouseEvent) => {
   this.clearCanvas();
 };
 
-mouseUpHandler = (e: MouseEvent) => {
+  private mouseUpHandler = (e: MouseEvent) => {
   if (
     this.activeTool !== "free-draw" &&
     this.activeTool !== "eraser" &&
@@ -1900,7 +1794,7 @@ mouseWheelHandler = (e: WheelEvent) => {
   this.clearCanvas();
 };
 
-mouseMoveHandler = (e: MouseEvent) => {
+  private mouseMoveHandler = (e: MouseEvent) => {
   if (this.isDraggingCanvas) {
     const dx = e.clientX - this.lastMouseX;
     const dy = e.clientY - this.lastMouseY;
