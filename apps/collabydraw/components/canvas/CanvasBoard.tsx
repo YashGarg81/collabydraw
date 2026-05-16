@@ -37,6 +37,7 @@ import { LiveCursors, useRemoteCursors } from "../LiveCursors";
 import { LayersPanel } from "../LayersPanel";
 import { Rulers } from "../Rulers";
 import { CommentThread } from "./CommentThread";
+import { DebugOverlay } from "../DebugOverlay";
 
 export default function CanvasBoard() {
     const { data: session, status } = useSession();
@@ -992,6 +993,8 @@ export default function CanvasBoard() {
                     height={canvasSize.h}
                 />
             )}
+
+            <DebugOverlay engine={canvasEngineState.engine} />
         </div>
     )
 };

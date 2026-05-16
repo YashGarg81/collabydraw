@@ -118,6 +118,7 @@ export class CanvasEngine {
   private marqueeStartY: number = 0;
   private marqueeCurrentX: number = 0;
   private marqueeCurrentY: number = 0;
+  private hoveredShapeId: string | null = null;
   
   private SelectionController: SelectionController;
   private cachedShapes: Shape[] = [];
@@ -895,6 +896,21 @@ export class CanvasEngine {
 
       if (isBeingStreamed) {
         return;
+      }
+
+      // Phase 2 UX Polish: Hover Affordance
+      if (
+        this.hoveredShapeId === shape.id && 
+        this.activeTool === "selection" && 
+        !this.SelectionController.getSelectedShapes().find(s => s.id === shape.id)
+      ) {
+        this.ctx.save();
+        TransformEngine.applyTransform(this.ctx, shape);
+        const bounds = this.SelectionController.getShapeBounds(shape);
+        this.ctx.strokeStyle = "rgba(105, 101, 219, 0.4)"; // Soft purple hover
+        this.ctx.lineWidth = 1.5 / this.scale;
+        this.ctx.strokeRect(bounds.x - 2, bounds.y - 2, bounds.width + 4, bounds.height + 4);
+        this.ctx.restore();
       }
       
       this.ctx.save();
@@ -1991,6 +2007,28 @@ mouseMoveHandler = (e: MouseEvent) => {
     } else if (this.SelectionController.isResizingShape()) {
       this.SelectionController.updateResizing(x, y);
       this.clearCanvas();
+    } else if (!this.clicked) {
+      // Phase 2 UX Polish: Hover affordance resolution
+      const shapeAtCursor = this.getShapeAtPoint(x, y);
+      const targetId = shapeAtCursor ? (this.groupManager.resolveSelection(shapeAtCursor, this.existingShapes)[0]?.id ?? shapeAtCursor.id) : null;
+      if (this.hoveredShapeId !== targetId) {
+        this.hoveredShapeId = targetId || null;
+        this.clearCanvas();
+      }
+      
+      // Update cursor if hovering over a resize handle
+      if (this.SelectionController.hasSelection()) {
+        const handle = this.SelectionController.getResizeHandleAtPoint(x, y);
+        if (handle) {
+          this.canvas.style.cursor = handle.cursor;
+        } else if (targetId && this.SelectionController.getSelectedShapes().find(s => s.id === targetId)) {
+          this.canvas.style.cursor = "move";
+        } else {
+          this.canvas.style.cursor = "default";
+        }
+      } else {
+        this.canvas.style.cursor = targetId ? "pointer" : "default";
+      }
     }
     return;
   }
@@ -4254,6 +4292,7 @@ public ungroupSelected() {
   public renameLayer(id: string, name: string) { this.layerManager.renameLayer(id, name); }
   public toggleLayerVisibility(id: string) { this.layerManager.toggleVisibility(id); this.clearCanvas(); }
   public toggleLayerLock(id: string) { this.layerManager.toggleLock(id); }
+  public reorderLayers(layerIds: string[]) { this.layerManager.reorderLayers(layerIds); this.clearCanvas(); }
   public deleteLayer(id: string) {
     this.layerManager.deleteLayer(id, this.cachedShapes, (shape) => {
       if (shape.id) this.yShapes.set(shape.id, shape);

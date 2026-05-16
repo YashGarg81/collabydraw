@@ -29,7 +29,7 @@ const DEFAULT_LAYER: Layer = {
   name: "Layer 1",
   visible: true,
   locked: false,
-  order: "a0",
+  order: "00000",
 };
 
 /**
@@ -139,8 +139,7 @@ export class LayerManager {
   public createLayer(name: string): Layer {
     const id = `layer_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     const layers = this.getLayers();
-    const lastOrder = layers[layers.length - 1]?.order ?? "a0";
-    const newOrder = this.incrementOrder(lastOrder);
+    const newOrder = ((layers.length > 0 ? parseInt(layers[layers.length - 1].order) : 0) + 1).toString().padStart(5, '0');
 
     const layer: Layer = { id, name, visible: true, locked: false, order: newOrder };
     this.doc.transact(() => { this.yLayers.set(id, layer); }, this.localOrigin);
@@ -163,6 +162,20 @@ export class LayerManager {
     const existing = this.yLayers.get(id);
     if (!existing) return;
     this.doc.transact(() => { this.yLayers.set(id, { ...existing, locked: !existing.locked }); }, this.localOrigin);
+  }
+
+  public reorderLayers(layerIds: string[]) {
+    this.doc.transact(() => {
+      layerIds.forEach((id, index) => {
+        const layer = this.yLayers.get(id);
+        if (layer) {
+          const newOrder = index.toString().padStart(5, '0');
+          if (layer.order !== newOrder) {
+            this.yLayers.set(id, { ...layer, order: newOrder });
+          }
+        }
+      });
+    }, this.localOrigin);
   }
 
   /**
@@ -195,16 +208,5 @@ export class LayerManager {
 
   private notify() {
     this.onChange?.(this.getLayers());
-  }
-
-  /**
-   * Minimal fractional order increment: "a0" → "a1" → ... → "a9" → "b0"
-   * For production: replace with the `fractional-indexing` npm package.
-   */
-  private incrementOrder(order: string): string {
-    const prefix = order.slice(0, -1);
-    const suffix = parseInt(order.slice(-1));
-    if (suffix < 9) return prefix + (suffix + 1);
-    return String.fromCharCode(prefix.charCodeAt(0) + 1) + "0";
   }
 }

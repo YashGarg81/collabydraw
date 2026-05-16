@@ -254,7 +254,8 @@ export class SelectionController {
       { x: bounds.x + bounds.width, y: bounds.y + bounds.height, cursor: "se-resize", position: "bottom-right" },
     ];
     if (shape) {
-      handles.push({ x: bounds.x + bounds.width / 2, y: bounds.y - 30, cursor: "crosshair", position: "rotation" });
+      // Phase 2: Rotation UX Polish — use 'grab'/'grabbing' instead of 'crosshair'
+      handles.push({ x: bounds.x + bounds.width / 2, y: bounds.y - 30, cursor: "grab", position: "rotation" });
     }
     return handles;
   }
@@ -498,6 +499,30 @@ export class SelectionController {
     ) {
       const newBounds = { ...this.originalCombinedBounds };
       this.setCursor(this.activeResizeHandle.cursor);
+
+      // Phase 2: Rotation UX Polish
+      if (this.activeResizeHandle.position === "rotation") {
+          this.setCursor("grabbing");
+          const centerX = this.originalCombinedBounds.x + this.originalCombinedBounds.width / 2;
+          const centerY = this.originalCombinedBounds.y + this.originalCombinedBounds.height / 2;
+          // Calculate absolute angle relative to the center
+          const angle = Math.atan2(y - centerY, x - centerX) + Math.PI / 2;
+
+          this.selectedShapes.forEach(shape => {
+              const original = shape.id ? this.originalShapeStates.get(shape.id) : null;
+              if (!original) return;
+              shape.rotation = angle;
+              shape.transformOrigin = { x: 0.5, y: 0.5 };
+          });
+          
+          this.triggerUpdate();
+          if (this.onLiveUpdateCallback) {
+            this.onLiveUpdateCallback(this.selectedShapes);
+          }
+          this.onDragOrResizeCursorMove?.(x, y);
+          return;
+      }
+
       const snappedX = this.getSnappedPoint(x);
       const snappedY = this.getSnappedPoint(y);
       
