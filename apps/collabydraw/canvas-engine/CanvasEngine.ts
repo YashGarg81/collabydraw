@@ -96,12 +96,12 @@ export class CanvasEngine {
   private textAlign: TextAlign = "left";
   private fontStyle: FontStyle = "normal";
 
-  private existingShapes: Shape[] = [];
   private yDoc: Y.Doc;
   private yShapes: Y.Map<Shape>;
   private yOrder: Y.Array<string>;
   private yUndoManager: Y.UndoManager;
   private connectionId: string | null = null;
+  private myConnections: { connectionId: string; connected: boolean }[] = [];
   public onHistoryChange: ((canUndo: boolean, canRedo: boolean) => void) | null = null;
 
   private isDraggingCanvas: boolean = false;
@@ -325,7 +325,7 @@ export class CanvasEngine {
           case WsDataType.USER_LEFT:
             if (data.userId === this.userId && data.connectionId) {
               this.myConnections = this.myConnections.filter(
-                (c) => c.connectionId !== data.connectionId
+                (c: { connectionId: string; connected: boolean }) => c.connectionId !== data.connectionId
               );
             }
             if (data.userId) {
